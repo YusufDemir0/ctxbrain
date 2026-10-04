@@ -165,6 +165,33 @@ _SUFFIXES = (
     ("le", 4, "consonant"), ("la", 4, "consonant"),
     ("i", 4, "consonant"), ("u", 4, "consonant"), ("e", 4, "consonant"), ("a", 4, "consonant"),
 )
+# Verb suffixes: progressive, future, past, infinitive/verbal noun, evidential. "kullaniyoruz",
+# "kullandik" and "kullanmak" all reach "kullan"; "saklama" and "sakliyoruz" reach "sakl" through
+# the final-vowel drop below, because the progressive swallows a root's last vowel.
+_VERB_SUFFIXES = (
+    ("iyorlar", 2, "any"), ("uyorlar", 2, "any"), ("iyorsun", 2, "any"), ("uyorsun", 2, "any"),
+    ("yacagiz", 2, "vowel"), ("yecegiz", 2, "vowel"),
+    ("iyoruz", 2, "any"), ("uyoruz", 2, "any"), ("iyorum", 2, "any"), ("uyorum", 2, "any"),
+    ("iyordu", 2, "any"), ("uyordu", 2, "any"), ("acagiz", 3, "consonant"), ("ecegiz", 3, "consonant"),
+    ("yacak", 2, "vowel"), ("yecek", 2, "vowel"),
+    # After a vowel, "-di", "-dim" and "-diniz" are also a softened noun plus possessive
+    # ("kilidi" = kilit+i, "umudu" = umut+u), so those three read as past tense only after a
+    # voiced consonant ("kullandi", "geldi"). "-dik" and "-diler" have no such noun twin.
+    ("diniz", 3, "voiced_consonant"), ("dunuz", 3, "voiced_consonant"),
+    ("tiniz", 3, "voiceless"), ("tunuz", 3, "voiceless"),
+    ("diler", 3, "voiced"), ("dilar", 3, "voiced"), ("tiler", 3, "voiceless"), ("tilar", 3, "voiceless"),
+    ("iyor", 2, "any"), ("uyor", 2, "any"), ("acak", 3, "consonant"), ("ecek", 3, "consonant"),
+    ("dik", 3, "voiced"), ("duk", 3, "voiced"), ("tik", 3, "voiceless"), ("tuk", 3, "voiceless"),
+    ("dim", 3, "voiced_consonant"), ("dum", 3, "voiced_consonant"), ("tim", 3, "voiceless"), ("tum", 3, "voiceless"),
+    ("mak", 3, "any"), ("mek", 3, "any"), ("mis", 3, "any"), ("mus", 3, "any"),
+    ("di", 3, "voiced_consonant"), ("du", 3, "voiced_consonant"), ("ti", 3, "voiceless"), ("tu", 3, "voiceless"),
+    ("ma", 3, "any"), ("me", 3, "any"),
+)
+_VERBAL = frozenset(suffix for suffix, _, _ in _VERB_SUFFIXES)
+# Longest first across both tables; sorted() is stable, so equal lengths keep table order.
+_ALL_SUFFIXES = tuple(sorted(_SUFFIXES + _VERB_SUFFIXES, key=lambda item: -len(item[0])))
+# "-istik" nouns (istatistik, lojistik) end like a voiceless past tense but are not verbs.
+_NOT_PAST = ("istik",)
 
 
 def _attaches(previous, gate):
@@ -176,6 +203,8 @@ def _attaches(previous, gate):
         return previous in _VOICELESS
     if gate == "voiced":
         return previous not in _VOICELESS
+    if gate == "voiced_consonant":
+        return previous not in _VOICELESS and previous not in _VOWELS
     return True
 
 
@@ -191,19 +220,25 @@ def _harmonizes(stem, suffix):
 
 
 @functools.lru_cache(maxsize=16384)
-def _stem(word):
+def _stem(word, verbs=False):
     # Words under 5 characters are already stems; peeling them merges unrelated roots.
+    verbal = False
     while len(word) >= 5:
-        for suffix, floor, gate in _SUFFIXES:
+        for suffix, floor, gate in (_ALL_SUFFIXES if verbs else _SUFFIXES):
             if not word.endswith(suffix):
                 continue
             stem = word[:-len(suffix)]
             if len(stem) < floor or not _attaches(stem[-1], gate) or not _harmonizes(stem, suffix):
                 continue
+            if suffix in ("tik", "tuk") and word.endswith(_NOT_PAST):
+                continue
+            verbal = verbal or suffix in _VERBAL
             word = stem
             break
         else:
             break
+    if verbal and len(word) >= 3 and word[-1] in _VOWELS:
+        word = word[:-1]
     # Consonant alternation: "grafiği" peels to "grafig", "kilidi" to "kilid". Devoicing every
     # final b/d/g, not only peeled ones, keeps query and document on the same canonical form.
     if len(word) >= 4 and word[-1] in _DEVOICE:
@@ -211,16 +246,57 @@ def _stem(word):
     return word
 
 
-def _tokens(text):
+# English technical terms fold onto the Turkish stem, so "database" finds a note that says
+# "veritabanı" and back. Replacement, like stemming: one word stays one token. Words in the
+# stopword list are left out, or their Turkish twin ("project" -> "proje") would become one.
+_GLOSSARY = (
+    ("database", "veritabani"), ("cache", "onbellek"), ("memory", "bellek"), ("lock", "kilit"),
+    ("session", "oturum"), ("security", "guvenlik"), ("distributed", "dagitik"), ("storage", "depolama"),
+    ("dependency", "bagimlilik"), ("dependencies", "bagimlilik"), ("migration", "goc"), ("schema", "sema"),
+    ("server", "sunucu"), ("backup", "yedek"), ("queue", "kuyruk"), ("connection", "baglanti"),
+    ("pool", "havuz"), ("error", "hata"), ("bug", "hata"), ("configuration", "yapilandirma"),
+    ("config", "yapilandirma"), ("settings", "ayar"), ("authorization", "yetkilendirme"),
+    ("deployment", "dagitim"), ("release", "surum"), ("version", "surum"), ("search", "arama"),
+    ("event", "olay"), ("request", "istek"), ("response", "yanit"), ("password", "parola"),
+    ("permission", "izin"), ("repository", "depo"), ("folder", "klasor"), ("file", "dosya"),
+    ("task", "gorev"), ("meeting", "toplanti"), ("report", "rapor"), ("customer", "musteri"),
+    ("invoice", "fatura"), ("payment", "odeme"), ("user", "kullanici"), ("crash", "cokme"),
+    ("primary", "birincil"), ("graph", "grafik"), ("retry", "deneme"), ("overflow", "tasma"),
+    ("recovery", "kurtarma"), ("update", "guncelleme"), ("backend", "sunucu"), ("frontend", "arayuz"),
+    ("interface", "arayuz"), ("timeout", "zamanasimi"), ("cluster", "kume"), ("table", "tablo"),
+)
+_SYNONYMS = {verbs: {_stem(english, verbs): _stem(turkish, verbs) for english, turkish in _GLOSSARY}
+             for verbs in (False, True)}
+
+
+def _canonical(word, verbs=False):
+    stem, synonyms = _stem(word, verbs), _SYNONYMS[verbs]
+    if stem in synonyms:
+        return synonyms[stem]
+    if stem.endswith("s") and stem[:-1] in synonyms:  # English plural: "events", "sessions"
+        return synonyms[stem[:-1]]
+    return stem
+
+
+def _tokens(text, verbs=False):
+    """Noun stems, devoicing and the glossary: the precise form every automatic path uses."""
     text = unicodedata.normalize("NFKD", str(text).casefold())
     text = "".join(c for c in text if not unicodedata.combining(c)).replace("ı", "i")
-    return {_stem(word) for word in re.findall(r"[a-z0-9]+", text)}
+    return {_canonical(word, verbs) for word in re.findall(r"[a-z0-9]+", text)}
+
+
+def _search_tokens(text):
+    """Explicit search also folds verb conjugations. Strict per-turn context does not: generic
+    command verbs ("goster", "calistir") would match every note that conjugates them."""
+    return _tokens(text, verbs=True)
 
 
 # Stopwords are matched against stems, so Turkish content words had to leave the list:
 # "notlar", "kararlari", "projede", "nedenleri" and "durumu" all stem onto entries that
-# used to be here, which emptied the query instead of widening it.
-STOPWORDS = _tokens("the a an is are was were what which who when where how why of to in on at for from with and or does did do has have latest current please tell about my our this that it its project projects status decision decisions show find get ve veya bir bu su o ne kim nasil hangi nedir neydi mi mu icin ile bana benim bizim olarak olan oldu en son guncel soyle getir bul yok say ignore disregard no")
+# used to be here, which emptied the query instead of widening it. "guncel" left with verb
+# stemming: "guncelleme" and "guncelledik" now reach it. Both stemming modes are listed.
+_STOPWORD_TEXT = "the a an is are was were what which who when where how why of to in on at for from with and or does did do has have latest current please tell about my our this that it its project projects status decision decisions show find get ve veya bir bu su o ne kim nasil hangi nedir neydi mi mu icin ile bana benim bizim olarak olan oldu en son soyle getir bul yok say ignore disregard no"
+STOPWORDS = _tokens(_STOPWORD_TEXT) | _search_tokens(_STOPWORD_TEXT)
 
 
 # Abbreviation prefixes ("postgres" ~ "postgresql", "elastic" ~ "elasticsearch") for explicit
@@ -258,9 +334,9 @@ LOG_WITHOUT_TITLE = 0.5
 
 
 def _field_score(terms, record, is_log):
-    title = _matches(terms, _tokens(str(record.get("title", "")) + " " + _alias_text(record)) - STOPWORDS)
-    facts = _matches(terms, _tokens(_json(record["facts"])) - STOPWORDS)
-    body = _matches(terms, _tokens(record["text"]) - STOPWORDS)
+    title = _matches(terms, _search_tokens(str(record.get("title", "")) + " " + _alias_text(record)) - STOPWORDS)
+    facts = _matches(terms, _search_tokens(_json(record["facts"])) - STOPWORDS)
+    body = _matches(terms, _search_tokens(record["text"]) - STOPWORDS)
     score = TITLE_WEIGHT * title + FACTS_WEIGHT * facts + body
     return score * LOG_WITHOUT_TITLE if is_log and not title else score
 
@@ -694,8 +770,9 @@ class MemoryStore:
             statuses = [statuses]
         eligible, stale_count = self._eligible(audience, project)
         superseded = {rid for record in eligible for rid in record["supersedes"]}
-        query_tokens = _tokens(query)
-        project_tokens = _tokens(project or "")
+        tokenize = _tokens if strict else _search_tokens
+        query_tokens = tokenize(query)
+        project_tokens = tokenize(project or "")
         terms = query_tokens - STOPWORDS - project_tokens
         scoped_listing = project is not None and bool(query_tokens & project_tokens) and not (query_tokens - STOPWORDS - project_tokens)
         ranked = []
@@ -709,7 +786,7 @@ class MemoryStore:
             if strict and str(record.get("source", "")).startswith(self.STRICT_EXCLUDE):
                 continue
             # Aliases are source metadata, never a shortcut around eligibility gates.
-            vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + _alias_text(record)) - STOPWORDS
+            vocabulary = tokenize(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + _alias_text(record)) - STOPWORDS
             vocabularies[record["id"]] = vocabulary
             score = len(terms & vocabulary) if strict else _matches(terms, vocabulary)
             if score and not strict:

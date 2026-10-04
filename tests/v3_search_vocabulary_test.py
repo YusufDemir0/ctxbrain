@@ -37,6 +37,13 @@ class SearchVocabularyTest(unittest.TestCase):
                 self.assertEqual(categories[category]["recall_at_5"], 1.0)
         self.assertGreaterEqual(self.report["modes"]["non_strict"]["recall_at_5"], 0.90)
 
+    def test_verbs_and_glossary_reach_the_top(self):
+        # Before verb stems and the EN-TR glossary: "schema migration" was never found.
+        categories = self.report["modes"]["non_strict"]["categories"]
+        for category in ("verb_inflection", "synonym_crosslingual"):
+            with self.subTest(category=category):
+                self.assertEqual(categories[category]["recall_at_1"], 1.0)
+
     def test_field_weighted_ranking_puts_the_target_first(self):
         # 0.0 on match counts, where daily logs won every tie on recency; 0.923 field-weighted.
         self.assertGreaterEqual(self.report["modes"]["non_strict"]["recall_at_1"], 0.85)

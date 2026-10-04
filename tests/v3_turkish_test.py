@@ -146,6 +146,61 @@ class TurkishStrictContextTest(VaultTestCase):
         self.assertEqual(self.ids('kütüphanenin yedeklemeleri', strict=True), ['yedekleme'])
 
 
+# (form a note writes, form a user types): verb conjugations and EN<->TR technical terms.
+VERB_PAIRS = (
+    ('kurtarma prosedürü', 'kurtardık'), ('saklama', 'saklıyoruz'), ('deneme', 'denedik'),
+    ('depolama', 'depoluyoruz'), ('taşması', 'taştı'), ('okuma', 'okuyacak'),
+    ('kullanmak', 'kullanacağız'), ('yapılandırma', 'yapılandırdık'),
+)
+GLOSSARY_PAIRS = (
+    ('veritabanı', 'database'), ('önbellek', 'cache'), ('kilit', 'lock'), ('oturumu', 'sessions'),
+    ('güvenlik', 'security'), ('bağımlılık', 'dependencies'), ('göç', 'migration'), ('kuyruk', 'queue'),
+)
+
+
+class VerbAndGlossaryTest(VaultTestCase):
+    def matrix(self, pairs, written, asked):
+        for index, pair in enumerate(pairs):
+            self.ingest('rec-%02d' % index, pair[written] + ' hakkında kısa kayıt. ' + FILLER, 'notes/rec-%02d.md' % index)
+        for index, pair in enumerate(pairs):
+            with self.subTest(query=pair[asked]):
+                self.assertEqual(self.ids(pair[asked]), ['rec-%02d' % index])
+
+    def test_conjugated_query_finds_the_verbal_noun_and_back(self):
+        self.matrix(VERB_PAIRS, written=0, asked=1)
+
+    def test_verbal_noun_query_finds_the_conjugated_note(self):
+        self.matrix(VERB_PAIRS, written=1, asked=0)
+
+    def test_english_query_finds_the_turkish_note(self):
+        self.matrix(GLOSSARY_PAIRS, written=0, asked=1)
+
+    def test_turkish_query_finds_the_english_note(self):
+        self.matrix(GLOSSARY_PAIRS, written=1, asked=0)
+
+    def test_the_reported_question_finds_the_decision(self):
+        self.ingest('karar', '# Veritabanı kararı\n\nProje için PostgreSQL seçildi çünkü JSONB desteği var.',
+                    'knowledge/karar.md')
+        self.ingest('mutfak', 'Mutfak alışverişi: elma, ekmek.', 'notes/mutfak.md')
+        self.assertEqual(self.ids('hangi database kullanıyoruz'), ['karar'])
+
+    def test_no_glossary_term_turns_a_turkish_word_into_a_stopword(self):
+        for verbs, synonyms in self.module._SYNONYMS.items():
+            with self.subTest(verbs=verbs):
+                self.assertEqual({v for v in synonyms.values() if v in self.module.STOPWORDS}, set())
+
+    def test_istik_nouns_are_not_read_as_past_tense(self):
+        tokens = self.module._search_tokens
+        self.assertEqual(tokens('istatistik'), tokens('istatistiği'))
+
+    def test_strict_context_does_not_fold_verbs(self):
+        # Generic command verbs would otherwise pull every note that conjugates them.
+        self.assertNotEqual(self.module._tokens('gösteriyor'), self.module._tokens('göster'))
+        self.assertEqual(self.module._search_tokens('gösteriyor'), self.module._search_tokens('göster'))
+        self.ingest('rapor', 'Panel haftalık sonuçları gösteriyor ve tabloyu yeniliyor.', 'notes/rapor.md')
+        self.assertEqual(self.ids('sonuçları göster', strict=True), [])
+
+
 class PrefixSearchTest(VaultTestCase):
     """Explicit search matches abbreviations by prefix; strict per-turn context stays exact."""
 

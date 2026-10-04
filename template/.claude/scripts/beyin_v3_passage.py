@@ -47,7 +47,7 @@ BLOCK_OVERLAP = 200
 DEFAULT_EXCLUDE = ("daily/", "receipts/")
 CONFIG_NAME = "retrieval.json"
 CACHE_NAME = "passages.json"
-CACHE_VERSION = 1
+CACHE_VERSION = 2  # 2: verb stems and the EN-TR glossary change tokens the probe hash may miss
 CACHE_MAX_BYTES = 64 * 1024 * 1024
 MAX_EXCLUDES = 64
 # Tokenising budget per call for records the cache does not know yet. At least one record
