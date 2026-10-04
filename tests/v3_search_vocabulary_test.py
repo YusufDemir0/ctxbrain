@@ -48,11 +48,17 @@ class SearchVocabularyTest(unittest.TestCase):
         # 0.0 on match counts, where daily logs won every tie on recency; 0.923 field-weighted.
         self.assertGreaterEqual(self.report["modes"]["non_strict"]["recall_at_1"], 0.85)
 
-    def test_strict_context_gains_only_from_devoicing(self):
+    def test_strict_context_gains_from_devoicing_glossary_and_titles(self):
         # Strict stays exact by design, so abbreviations remain a measured gap there.
-        categories = self.report["modes"]["strict"]["categories"]
-        self.assertGreaterEqual(categories["consonant_alternation"]["recall_at_1"], 0.5)
-        self.assertEqual(categories["abbreviation_prefix"]["recall_at_5"], 0.0)
+        strict = self.report["modes"]["strict"]
+        self.assertGreaterEqual(strict["categories"]["consonant_alternation"]["recall_at_1"], 0.5)
+        self.assertEqual(strict["categories"]["abbreviation_prefix"]["recall_at_5"], 0.0)
+        self.assertGreaterEqual(strict["recall_at_1"], 0.5)  # 0.231 before glossary and title tie-break
+
+    def test_title_tiebreak_keeps_the_original_strict_baseline(self):
+        # The glossary merged "connection" into "baglanti" and flipped one equal-weight tie (0.812).
+        strict = evaluate_v3_search.evaluate(modes=["strict"])["modes"]["strict"]
+        self.assertGreaterEqual(strict["recall_at_1"], 0.84)
 
 
 if __name__ == "__main__":

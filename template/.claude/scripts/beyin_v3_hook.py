@@ -337,7 +337,39 @@ def drain_queue(vault, state):
     return {"processed": 0, "failed": len(pending), "pending": len(pending)}
 
 
+_PENDING_CAPTURE = []
+
+
+def ctx_command(vault, state, harness, payload):
+    """Hook output for a "ctx:" prompt, or None. Claude Code and Codex block the prompt, so the
+    model never sees it; other clients get the reply as context."""
+    from beyin_v3_capture import command
+    try:
+        reply = command(vault, state, prompt_text(payload), payload.get('session_id'))
+    except Exception as exc:
+        reply = 'ctx komutu çalışmadı (' + type(exc).__name__ + '). Terminalde: python3 beyin.py doctor'
+    if reply is None:
+        return None
+    if harness in ('claude', 'codex'):
+        return {"decision": "block", "reason": reply}
+    return output_context(harness, 'UserPromptSubmit',
+                          'ctxbrain komutu islendi; yalniz bu sonucu kullaniciya aynen ilet:\n' + reply)
+
+
 def main():
+    try:
+        _main()
+    finally:
+        for vault, state, prompt, session in _PENDING_CAPTURE:
+            try:
+                from beyin_v3_capture import capture, enabled
+                if enabled(state):
+                    capture(vault, state, prompt, session)
+            except Exception:
+                pass  # capture can never cost the turn
+
+
+def _main():
     started = time.monotonic()
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8")
@@ -387,6 +419,11 @@ def main():
         if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or os.environ.get("BEYIN_V3_SKIP") == "1" or payload.get('no_memory') is True:
             print("{}")
             return
+        if event == 'UserPromptSubmit' and not args.metadata_only and not is_synthetic_prompt(payload):
+            reply = ctx_command(vault, state, args.harness, payload)
+            if reply is not None:
+                print(json.dumps(reply))
+                return
         if event == 'SessionStart' and not args.metadata_only:
             from beyin_v3_releases import session_start
             notice = session_start(vault, state)
@@ -426,16 +463,12 @@ def main():
                         notice += touch(state, args.harness, payload.get('session_id'))
             except Exception:
                 pass  # a marker can never cost the turn
-        # Before enqueue, so this turn's sync already indexes what the user just decided. Never
-        # from the global bridge: it would copy prompts from unrelated projects into this vault.
+        # Written after this turn's context is built (see main), so the model is not handed back the
+        # sentence it is reading; the turn's Stop sync indexes it. Never from the global bridge: it
+        # would copy prompts from unrelated projects into this vault.
         if (not args.metadata_only and not is_synthetic_prompt(payload) and
                 (event == 'UserPromptSubmit' or (event == 'SessionStart' and args.harness in ('hermes', 'opencode', 'antigravity')))):
-            try:
-                from beyin_v3_capture import capture, enabled
-                if enabled(state):
-                    capture(vault, state, prompt_text(payload), payload.get('session_id'))
-            except Exception:
-                pass  # capture can never cost the turn
+            _PENDING_CAPTURE.append((vault, state, prompt_text(payload), payload.get('session_id')))
         if not settings['auto_sync']:
             print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return

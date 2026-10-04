@@ -236,6 +236,8 @@ def parser():
     sub.add_parser("sync", help="Reconcile Markdown sources into local state")
     sub.add_parser("skill-sync", help="Reconcile project-local shared skills")
     sub.add_parser("doctor", help="Read local hook health and pending metadata counts")
+    ctx = sub.add_parser("ctx", help='Manage captured decisions: liste, unut <n|son|kelime>, kaydet <cümle>, kapat, aç')
+    ctx.add_argument("words", nargs="*")
     recap = sub.add_parser("recap", help="Read recent source-linked outcomes without a model call")
     recap.add_argument("--days", type=int, default=7, help="Calendar days in UTC, including today (1..366)")
     recap.add_argument("--limit", type=int, default=20, help="Maximum recent receipts to return (1..100)")
@@ -605,6 +607,11 @@ def main(argv=None):
             if any(entry['status'] == 'compacted' for entry in result['files'].values()):
                 # Index the shorter sources and the private archive before anyone reads them.
                 result['sync'] = {'status': load_sync()(vault, state).sync().get('status')}
+        elif args.command == "ctx":
+            load_sync()  # puts the runtime directory on sys.path, from a checkout or a vault
+            from beyin_v3_capture import command
+            print(command(vault, state, 'ctx: ' + ' '.join(args.words), 'terminal'))
+            return 0
         elif args.command == "sync":
             result = sync.sync()
         elif args.command == "recap":

@@ -703,7 +703,10 @@ class MemoryStore:
             weight = sum(math.log((total + 1) / (frequency.get(token, 0) + 1)) + 1 for token in terms & vocabulary)
             weight = weight / idf_max / math.log(10 + len(vocabulary))
             if weight >= self.STRICT_MIN_WEIGHT:
-                weighted.append((weight, record))
+                # Ordering only, after the calibrated gate: a note titled by the query outranks one
+                # that mentions the same words in passing.
+                title = len(terms & _tokens(str(record.get("title", "")))) / max(1, len(terms))
+                weighted.append((weight + self.STRICT_TITLE_TIEBREAK * title, record))
         weighted.sort(key=lambda item: (item[1].get("updated_at", ""), item[1]["id"]), reverse=True)
         weighted.sort(key=lambda item: -item[0])
         return weighted
@@ -717,6 +720,7 @@ class MemoryStore:
     # relevant 0.33-1.21; 0.30 silenced 6/7 irrelevant and kept 7/7 relevant.
     STRICT_MIN_SHARED = 2
     STRICT_MIN_WEIGHT = 0.30
+    STRICT_TITLE_TIEBREAK = 0.1
     STRICT_EXCLUDE = ("daily/",)  # session logs are records, not knowledge; they match everything
 
     # Per-turn strict context ranks Markdown passages instead of whole notes and delivers the

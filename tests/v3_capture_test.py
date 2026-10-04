@@ -126,6 +126,77 @@ class CaptureNoteTest(unittest.TestCase):
         self.assertEqual([record['source'] for record in found], [capture.DIRECTORY + '/2026-10-04.md'])
 
 
+class CommandTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix='v3-capture-command-')
+        self.addCleanup(tmp.cleanup)
+        self.vault, self.state = Path(tmp.name) / 'vault', Path(tmp.name) / 'state'
+        self.vault.mkdir()
+        self.state.mkdir()
+
+    def run_command(self, text):
+        return capture.command(self.vault, self.state, text, 's', NOW)
+
+    def seed(self):
+        for prompt in ('Önbellek için Valkey seçtik.', 'Bundan sonra testleri İngilizce yaz.', 'Veritabanı olarak PostgreSQL kullanalım.'):
+            capture.capture(self.vault, self.state, prompt, 's', NOW)
+
+    def sentences(self):
+        return [entry[5] for entry in capture.recent(self.vault)]
+
+    def test_ordinary_prompts_are_not_commands(self):
+        self.assertIsNone(self.run_command('Bundan sonra ctx: diye başlayan bir şey yaz.'))
+        self.assertIsNone(self.run_command(None))
+
+    def test_list_numbers_newest_first(self):
+        self.assertIn('Henüz yakalanan', self.run_command('ctx: liste'))
+        self.seed()
+        reply = self.run_command('  CTX :  liste')
+        self.assertIn(' 1. 2026-10-04 14:32 karar: Veritabanı olarak PostgreSQL kullanalım.', reply)
+        self.assertIn(' 3. 2026-10-04 14:32 karar: Önbellek için Valkey seçtik.', reply)
+
+    def test_forget_by_last_number_and_word(self):
+        self.seed()
+        self.assertEqual(self.run_command('ctx: unut son'), 'Silindi: Veritabanı olarak PostgreSQL kullanalım.')
+        self.assertEqual(self.run_command('ctx: unut 2'), 'Silindi: Önbellek için Valkey seçtik.')
+        self.assertEqual(self.run_command('ctx: unut ingilizce'), 'Silindi: Bundan sonra testleri İngilizce yaz.')
+        self.assertEqual(self.sentences(), [])
+        self.assertIn('# Yakalama 2026-10-04', (self.vault / capture.DIRECTORY / '2026-10-04.md').read_text(encoding='utf-8'))
+        self.assertIn('Eşleşen kayıt yok', self.run_command('ctx: unut 9'))
+
+    def test_an_ambiguous_word_deletes_nothing(self):
+        self.seed()
+        reply = self.run_command('ctx: unut e')
+        self.assertIn('Birden çok kayıt eşleşti', reply)
+        self.assertEqual(len(self.sentences()), 3)
+
+    def test_save_writes_a_note_line_once_and_redacts(self):
+        token = 'ghp_' + 'b' * 36
+        self.assertEqual(self.run_command(f'ctx: kaydet Staging anahtarı {token} ile çalışıyor'), 'Kaydedildi.')
+        self.assertEqual(self.run_command(f'ctx: kaydet Staging anahtarı {token} ile çalışıyor'), 'Bu cümle bugün zaten kayıtlı.')
+        entry = capture.recent(self.vault)[0]
+        self.assertEqual(entry[4], 'not')
+        self.assertNotIn(token, entry[1])
+        self.assertIn('Kaydedilecek cümleyi yaz', self.run_command('ctx: kaydet'))
+
+    def test_switch_and_help(self):
+        self.assertIn('kapatıldı', self.run_command('ctx: kapat'))
+        self.assertFalse(capture.enabled(self.state))
+        self.run_command('ctx: kaydet elle iki kelime')
+        self.assertIn('KAPALI', self.run_command('ctx: liste'))
+        self.assertIn('açıldı', self.run_command('ctx: aç'))
+        self.assertTrue(capture.enabled(self.state))
+        self.assertEqual(self.run_command('ctx: bilinmeyen'), capture.HELP)
+
+    def test_terminal_command(self):
+        cli = ROOT / 'scripts/beyin_v3.py'
+        self.seed()
+        result = subprocess.run([sys.executable, str(cli), '--vault', str(self.vault), '--state', str(self.state), 'ctx', 'unut', 'son'],
+                                text=True, encoding='utf-8', capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'Silindi: Veritabanı olarak PostgreSQL kullanalım.')
+
+
 class SettingTest(unittest.TestCase):
     def test_setting_is_machine_local_default_on_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as root:
@@ -160,13 +231,29 @@ class HookCaptureTest(unittest.TestCase):
             if key in os.environ:
                 self.env[key] = os.environ[key]
 
-    def prompt(self, text, extra=(), **fields):
+    def prompt(self, text, extra=(), harness='claude', **fields):
         payload = dict({'hook_event_name': 'UserPromptSubmit', 'session_id': 'hook-session',
                         'event_id': 'e-' + str(abs(hash(text))), 'prompt': text}, **fields)
         result = subprocess.run([sys.executable, str(HOOK), '--vault', str(self.vault), '--state', str(self.state),
-                                 '--harness', 'claude', *extra], input=json.dumps(payload), text=True,
+                                 '--harness', harness, *extra], input=json.dumps(payload), text=True,
                                 encoding='utf-8', capture_output=True, env=self.env, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_ctx_commands_are_answered_by_the_hook_and_never_reach_the_model(self):
+        self.prompt('Bundan sonra testleri İngilizce yaz.')
+        reply = self.prompt('ctx: liste')
+        self.assertEqual(reply['decision'], 'block')
+        self.assertIn('1. ', reply['reason'])
+        self.assertEqual(self.prompt('ctx: unut son'), {'decision': 'block', 'reason': 'Silindi: Bundan sonra testleri İngilizce yaz.'})
+        self.assertNotIn('ctx:', self.captured())
+        other = self.prompt('ctx: liste', harness='opencode')
+        self.assertIn('Henüz yakalanan', other['hookSpecificOutput']['additionalContext'])
+
+    def test_the_new_sentence_is_written_after_this_turns_context(self):
+        reply = self.prompt('Bundan sonra testleri İngilizce yaz.')
+        self.assertNotIn('testleri İngilizce', json.dumps(reply, ensure_ascii=False))
+        self.assertIn('testleri İngilizce', self.captured())
 
     def captured(self):
         directory = self.vault / capture.DIRECTORY

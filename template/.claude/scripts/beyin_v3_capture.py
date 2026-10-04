@@ -80,14 +80,21 @@ def statements(prompt):
 def capture(vault, state, prompt, session_id, now=None):
     """Append new statements to today's capture note; returns how many were written."""
     found = statements(prompt)
-    if not found:
-        return 0
-    from beyin_v3_secrets import redact, record
-    now = now or datetime.now().astimezone()
+    return _append(vault, state, found, session_id, now) if found else 0
+
+
+def _directory(vault):
     directory = Path(vault) / DIRECTORY
     for part in (Path(vault) / 'knowledge', directory):
         if part.is_symlink():
             raise ValueError('capture directory must not be a symlink')
+    return directory
+
+
+def _append(vault, state, found, session_id, now=None):
+    from beyin_v3_secrets import redact, record
+    now = now or datetime.now().astimezone()
+    directory = _directory(vault)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (now.strftime('%Y-%m-%d') + '.md')
     if path.is_symlink():
@@ -114,3 +121,100 @@ def capture(vault, state, prompt, session_id, now=None):
         with open(path, 'a', encoding='utf-8') as out:
             out.write('\n'.join(lines) + '\n')
     return len(lines)
+
+
+# In-chat management. A prompt that starts with "ctx:" is handled by the hook itself and never
+# reaches the model: no agent decides what is forgotten, and no tokens are spent.
+COMMAND = re.compile(r'^\s*ctx\s*:\s*(.*)$', re.S | re.I)
+ENTRY = re.compile(r'^- (\d\d:\d\d) · (\w+) · `[^`]*` · (.+)$')
+RECENT = 50
+SHOWN = 10
+HELP = ('ctxbrain komutları (modele gitmez):\n'
+        '  ctx: liste           son yakalananlar, en yeni 1 numara\n'
+        '  ctx: unut son        en son yakalananı sil\n'
+        '  ctx: unut 3          listedeki 3 numarayı sil\n'
+        '  ctx: unut <kelime>   tek eşleşen kaydı sil\n'
+        '  ctx: kaydet <cümle>  kaçırılan bir kararı elle kaydet\n'
+        '  ctx: kapat / ctx: aç yakalamayı kapat veya aç')
+
+
+def recent(vault, limit=RECENT):
+    """Captured entries, newest first: (path, raw line, date, time, kind, sentence)."""
+    directory = _directory(vault)
+    if not directory.is_dir():
+        return []
+    found = []
+    for path in sorted(directory.glob('????-??-??.md'), reverse=True):
+        if path.is_symlink():
+            continue
+        for line in reversed(path.read_text(encoding='utf-8').splitlines()):
+            match = ENTRY.match(line)
+            if match:
+                found.append((path, line, path.stem) + match.groups())
+                if len(found) == limit:
+                    return found
+    return found
+
+
+def _show(index, entry):
+    return f'{index:>2}. {entry[2]} {entry[3]} {entry[4]}: {entry[5]}'
+
+
+def _remove(entry):
+    from beyin_v3_sync import atomic
+    path, line = entry[0], entry[1]
+    lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+    for position, current in enumerate(lines):
+        if current.rstrip('\n') == line:
+            del lines[position]
+            break
+    else:
+        raise ValueError('entry changed on disk; run ctx: liste again')
+    atomic(path, ''.join(lines))
+
+
+def command(vault, state, prompt, session_id, now=None):
+    """The reply to a "ctx:" prompt, or None when the prompt is not a command."""
+    match = COMMAND.match(prompt) if isinstance(prompt, str) else None
+    if not match:
+        return None
+    verb, _, rest = match.group(1).strip().partition(' ')
+    verb, rest = fold(verb), rest.strip()
+    if verb in ('', 'liste', 'list'):
+        entries = recent(vault)
+        if not entries:
+            return 'Henüz yakalanan bir şey yok.\n\n' + HELP
+        state_line = 'Yakalama açık.' if enabled(state) else 'Yakalama KAPALI (ctx: aç).'
+        return (state_line + ' Son yakalananlar, en yeni üstte:\n' +
+                '\n'.join(_show(i, e) for i, e in enumerate(entries[:SHOWN], 1)) +
+                '\n\nSilmek için: ctx: unut <numara>')
+    if verb in ('unut', 'sil', 'forget'):
+        entries = recent(vault)
+        if rest in ('', 'son', 'last'):
+            chosen = entries[:1]
+        elif rest.isdigit():
+            chosen = entries[int(rest) - 1:int(rest)] if int(rest) >= 1 else []
+        else:
+            chosen = [e for e in entries if fold(rest) in fold(e[5])]
+            if len(chosen) > 1:
+                return ('Birden çok kayıt eşleşti; numarayla sil:\n' +
+                        '\n'.join(_show(entries.index(e) + 1, e) for e in chosen))
+        if not chosen:
+            return 'Eşleşen kayıt yok. ctx: liste ile numaraları gör.'
+        _remove(chosen[0])
+        return 'Silindi: ' + chosen[0][5]
+    if verb in ('kaydet', 'save'):
+        if len(rest.split()) < 2:
+            return 'Kaydedilecek cümleyi yaz: ctx: kaydet <cümle>'
+        sentence = ' '.join(rest.split())
+        if len(sentence) > MAX_SENTENCE:
+            sentence = sentence[:MAX_SENTENCE - 1].rstrip() + '…'
+        written = _append(vault, state, [('not', sentence)], session_id, now)
+        return 'Kaydedildi.' if written else 'Bu cümle bugün zaten kayıtlı.'
+    if verb in ('kapat', 'off'):
+        save(state, False)
+        return 'Yakalama kapatıldı. Açmak için: ctx: aç'
+    if verb in ('ac', 'on'):
+        save(state, True)
+        return 'Yakalama açıldı.'
+    return HELP
