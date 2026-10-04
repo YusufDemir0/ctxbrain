@@ -42,7 +42,8 @@ class SearchBenchmarkTest(unittest.TestCase):
 
         # Non-strict search baseline boundaries
         non_strict = report["modes"]["non_strict"]
-        self.assertGreaterEqual(non_strict["recall_at_1"], 0.65, "Baseline non-strict Recall@1 drop")
+        # 0.938 since field-weighted ranking moved into the runtime; was 0.719 on match counts.
+        self.assertGreaterEqual(non_strict["recall_at_1"], 0.90, "Baseline non-strict Recall@1 drop")
         self.assertGreaterEqual(non_strict["recall_at_5"], 0.95, "Baseline non-strict Recall@5 drop")
         self.assertLessEqual(non_strict["median_latency_ms"], 150.0, "Latency ceiling exceeded")
 

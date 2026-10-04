@@ -37,6 +37,10 @@ class SearchVocabularyTest(unittest.TestCase):
                 self.assertEqual(categories[category]["recall_at_5"], 1.0)
         self.assertGreaterEqual(self.report["modes"]["non_strict"]["recall_at_5"], 0.90)
 
+    def test_field_weighted_ranking_puts_the_target_first(self):
+        # 0.0 on match counts, where daily logs won every tie on recency; 0.923 field-weighted.
+        self.assertGreaterEqual(self.report["modes"]["non_strict"]["recall_at_1"], 0.85)
+
     def test_strict_context_gains_only_from_devoicing(self):
         # Strict stays exact by design, so abbreviations remain a measured gap there.
         categories = self.report["modes"]["strict"]["categories"]
