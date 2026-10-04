@@ -1,4 +1,21 @@
-# 🧠 avenoxbeyin V3
+# 🧠 ctxbrain
+
+> **ctxbrain, [avenoxai/avenoxbeyin](https://github.com/avenoxai/avenoxbeyin) projesinin bağımsız bir çatalıdır** (MIT, orijinal lisans ve atıf korunur). Amaç ana repoya katkı değil, fikri kendi yönünde geliştirmek: Türkçe uyumlu arama, otomatik karar yakalama ve isteğe bağlı anlamsal arama. Aşağıdaki bölümler orijinal belgeden gelir; farklar bu kutuda listelenir.
+>
+> **Farklar**
+> - Güncelleyici yalnız `YusufDemir0/ctxbrain` sürümlerini kabul eder; orijinal repodan paket çekmez.
+>
+> **Geliştirme akışı**
+> ```bash
+> python3 -m unittest discover -s tests -p "v3_*test.py"
+> python3 scripts/build_v3_release.py --version "$(cat VERSION)" --output "release/beyin-v3-$(cat VERSION).zip"
+> python3 /yol/vault/beyin.py update --package "release/beyin-v3-$(cat VERSION).zip"
+> ```
+> Aynı sürüm tekrar uygulanırsa `noop` döner; vault'a yeni kod almak için önce `VERSION` artırılır. Repo private olduğu sürece `update --check` `http_404` verir; bu beklenen durumdur.
+
+---
+
+# avenoxbeyin V3 (orijinal belge)
 
 Claude Code, Codex veya Google Antigravity ile kullanabileceğin yerel ikinci beyin. Notların Markdown dosyalarında kalır; bir istemcide kaydettiğin kaynak ve iş sonucu diğerinde de bulunabilir. Obsidian ile açabilir, normal bir metin editörüyle düzenleyebilirsin.
 
