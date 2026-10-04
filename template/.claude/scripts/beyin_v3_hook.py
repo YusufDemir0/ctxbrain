@@ -426,6 +426,16 @@ def main():
                         notice += touch(state, args.harness, payload.get('session_id'))
             except Exception:
                 pass  # a marker can never cost the turn
+        # Before enqueue, so this turn's sync already indexes what the user just decided. Never
+        # from the global bridge: it would copy prompts from unrelated projects into this vault.
+        if (not args.metadata_only and not is_synthetic_prompt(payload) and
+                (event == 'UserPromptSubmit' or (event == 'SessionStart' and args.harness in ('hermes', 'opencode', 'antigravity')))):
+            try:
+                from beyin_v3_capture import capture, enabled
+                if enabled(state):
+                    capture(vault, state, prompt_text(payload), payload.get('session_id'))
+            except Exception:
+                pass  # capture can never cost the turn
         if not settings['auto_sync']:
             print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return

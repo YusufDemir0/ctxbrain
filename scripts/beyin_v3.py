@@ -248,6 +248,8 @@ def parser():
     settings.add_argument("--companion-context-chars", type=int,
                           help="Opening context budget (SessionStart, continuity questions), 1000..24000; 0 uses --context-chars")
     settings.add_argument("--secret-filter", choices=("on", "off"))
+    settings.add_argument("--capture", choices=("on", "off"),
+                          help="Write the user's decision and rule sentences to knowledge/yakalanan/ on every prompt")
     settings.add_argument("--update-notifications", choices=("on", "off"))
     settings.add_argument("--last-session-chars", type=int, help="Hygiene limit for Last-Session.md; 0 turns it off")
     settings.add_argument("--threads-chars", type=int, help="Hygiene limit for Threads.md; 0 turns it off")
@@ -420,6 +422,11 @@ def main(argv=None):
                 save_project_context(state, args.project_context == 'on')
                 result['status'] = 'saved'
             result['project_context'] = 'on' if read_project_context(state) else 'off'
+            import beyin_v3_capture as capture
+            if args.capture is not None:
+                capture.save(state, args.capture == 'on')
+                result['status'] = 'saved'
+            result['capture'] = 'on' if capture.enabled(state) else 'off'
             # Machine-local and rollback-safe like companion limits: never a .beyin-preferences.json key.
             if hygiene_changes:
                 result['hygiene'] = hygiene.save_settings(state, hygiene_changes)
