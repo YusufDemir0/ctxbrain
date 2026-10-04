@@ -144,6 +144,7 @@ def record_scope(record, scopes):
 # Input reaches the stemmer already ASCII folded, so the table is written folded too.
 _VOWELS = frozenset("aeiou")
 _VOICELESS = frozenset("cfhkpst")
+_DEVOICE = {"b": "p", "d": "t", "g": "k"}
 # (suffix, minimum stem length, what the character before the suffix must be). Longest
 # first, peeled to a fixpoint: a fixed pass count breaks query/document symmetry, because
 # "kutuphanesi" needs one more pass than "kutuphane" to reach the same stem.
@@ -203,6 +204,10 @@ def _stem(word):
             break
         else:
             break
+    # Consonant alternation: "grafiği" peels to "grafig", "kilidi" to "kilid". Devoicing every
+    # final b/d/g, not only peeled ones, keeps query and document on the same canonical form.
+    if len(word) >= 4 and word[-1] in _DEVOICE:
+        word = word[:-1] + _DEVOICE[word[-1]]
     return word
 
 
@@ -216,6 +221,22 @@ def _tokens(text):
 # "notlar", "kararlari", "projede", "nedenleri" and "durumu" all stem onto entries that
 # used to be here, which emptied the query instead of widening it.
 STOPWORDS = _tokens("the a an is are was were what which who when where how why of to in on at for from with and or does did do has have latest current please tell about my our this that it its project projects status decision decisions show find get ve veya bir bu su o ne kim nasil hangi nedir neydi mi mu icin ile bana benim bizim olarak olan oldu en son guncel soyle getir bul yok say ignore disregard no")
+
+
+# Abbreviation prefixes ("postgres" ~ "postgresql", "elastic" ~ "elasticsearch") for explicit
+# search only. Strict per-turn context stays exact: its thresholds were calibrated on exact
+# matches, and "table" ~ "tablet" style noise must not reach an automatic prompt.
+# A prefix match is weaker evidence than an exact one, so "boyut" ~ "boyutlandirma" can
+# never tie a note that says "boyut" outright. 0.6-0.9 measured identical on both search
+# fixtures; 0.5 lets two prefixes tie one exact word and lose on recency.
+PREFIX_MIN = 5
+PREFIX_WEIGHT = 0.75
+
+
+def _prefix_terms(missing, vocabulary):
+    return {term for term in missing if len(term) >= PREFIX_MIN and any(
+        len(token) >= PREFIX_MIN and (token.startswith(term) or term.startswith(token))
+        for token in vocabulary)}
 
 
 class MemoryStore:
@@ -667,7 +688,10 @@ class MemoryStore:
             alias_text = " ".join(a[:160] for a in aliases[:32] if isinstance(a, str))
             vocabulary = _tokens(record["text"] + " " + _json(record["facts"]) + " " + str(record.get("title", "")) + " " + alias_text) - STOPWORDS
             vocabularies[record["id"]] = vocabulary
-            score = len(terms & vocabulary)
+            exact = terms & vocabulary
+            score = len(exact)
+            if not strict:
+                score += PREFIX_WEIGHT * len(_prefix_terms(terms - exact, vocabulary))
             if score or scoped_listing or snapshot:
                 ranked.append((score, record))
         if strict and not snapshot:

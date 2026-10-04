@@ -4,6 +4,7 @@
 >
 > **Farklar**
 > - Güncelleyici yalnız `YusufDemir0/ctxbrain` sürümlerini kabul eder; orijinal repodan paket çekmez.
+> - Arama ünsüz yumuşamasını tanır ("grafik" ↔ "grafiği", "kilit" ↔ "kilidi"). Açık aramada kısaltmalar önekle eşleşir ("postgres" ↔ "postgresql"); her mesajda otomatik eklenen katı bağlam birebir eşleşmede kalır. Ölçüm: `python3 scripts/evaluate_v3_search.py --fixture tests/fixtures/v3/search_vocabulary.json` (standart aramada ilk 5 isabeti %61.5 → %92.3; orijinal ölçümde gerileme yok).
 >
 > **Geliştirme akışı**
 > ```bash

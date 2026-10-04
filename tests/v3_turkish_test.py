@@ -21,6 +21,9 @@ PAIRS = (
     ('çatal', 'çatallarda'), ('kitap', 'kitaplar'), ('karar', 'kararı'),
     ('durum', 'durumu'), ('sunucu', 'sunucularda'), ('araba', 'arabanın'),
     ('neden', 'nedenleri'), ('kapı', 'kapısında'), ('orman', 'ormanda'),
+    # Consonant alternation: the final k/t/p softens before a vowel suffix.
+    ('grafik', 'grafiği'), ('kilit', 'kilidi'), ('uyuşmazlık', 'uyuşmazlığı'),
+    ('dolap', 'dolabı'), ('renk', 'rengi'), ('köpek', 'köpeğin'),
 )
 
 # Pairs that must stay apart: a stemmer that merges these turns recall into noise.
@@ -141,6 +144,30 @@ class TurkishStrictContextTest(VaultTestCase):
 
     def test_two_inflected_words_still_reach_strict_context(self):
         self.assertEqual(self.ids('kütüphanenin yedeklemeleri', strict=True), ['yedekleme'])
+
+
+class PrefixSearchTest(VaultTestCase):
+    """Explicit search matches abbreviations by prefix; strict per-turn context stays exact."""
+
+    def setUp(self):
+        super().setUp()
+        self.ingest('pg', 'PostgreSQL bağlantıları HikariCP ile yönetiliyor.', 'knowledge/pg.md')
+        self.ingest('ui', 'Arayüzde handle edilen olaylar.', 'notes/ui.md')
+
+    def test_abbreviation_finds_the_full_name(self):
+        self.assertEqual(self.ids('postgres'), ['pg'])
+        self.assertEqual(self.ids('hikari postgres'), ['pg'])
+
+    def test_strict_context_does_not_use_prefixes(self):
+        self.assertEqual(self.ids('postgres hikari', strict=True), [])
+
+    def test_terms_under_the_minimum_do_not_prefix_match(self):
+        self.assertEqual(self.ids('hand'), [])
+
+    def test_exact_match_outranks_a_newer_prefix_match(self):
+        self.ingest('exact', 'Havuz boyutu 20 bağlantı.', 'notes/exact.md', updated_at='2026-09-01')
+        self.ingest('prefix', 'Havuz boyutlandırması yapıldı.', 'notes/prefix.md', updated_at='2026-09-30')
+        self.assertEqual(self.ids('havuz boyutu')[:2], ['exact', 'prefix'])
 
 
 class LegacyStateTest(VaultTestCase):
