@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import unicodedata
 import tempfile
 import sys
 import time
@@ -229,6 +230,21 @@ def render(metadata, body):
 
 EXCLUDED_FILES = {'agents.md', 'claude.md', 'gemini.md', 'skill.md', 'hooks.md', 'config.md', 'settings.md', 'instructions.md', 'codex.md', 'setup.md', 'install.md'}
 EXCLUDED_DIRS = {'node_modules', 'receipts', '__pycache__'}
+CONFLICT_MARKERS = re.compile(r'(?m)^<{7} .*\n(?:.*\n)*?^={7}\s*\n(?:.*\n)*?^>{7} ')
+# A folder whose name carries a sensitivity word ("Şifreler", "Kasa", "Özel notlar", "Private") is
+# never indexed, at any depth: the cheapest layer of keeping what the user marked as private out of
+# every model's context. Words, not substrings: "Özellikler" or "Kasaba" stay indexed.
+SENSITIVE_WORDS = re.compile(
+    r'(?:kasa|sifre|parola|kimlik|kimlig|finans|finansal|musteri|vergi|fatura|maas|ozel|gizli|gizlilik)'
+    r'(?:ler|lar)?(?:i|im|in|imiz|leri|lari)?'
+    r'|(?:private|secret|password|credential)s?')
+_SENSITIVE_FOLD = str.maketrans({'ş': 's', 'ğ': 'g', 'ü': 'u', 'ö': 'o', 'ç': 'c', 'ı': 'i', 'â': 'a', 'î': 'i', 'û': 'u'})
+
+
+def sensitive_dir(name):
+    text = unicodedata.normalize('NFC', str(name)).replace('İ', 'i').replace('I', 'i').lower()
+    text = unicodedata.normalize('NFC', text.replace('\u0307', '')).translate(_SENSITIVE_FOLD)
+    return any(SENSITIVE_WORDS.fullmatch(word) for word in re.findall(r'[^\W\d_]+', text))
 COMPLETION_FIELDS = {'completion_contract', 'completion_criterion', 'evidence_refs'}
 
 
@@ -432,7 +448,8 @@ class SyncEngine:
         records, warnings, conflicts = {}, [], []
         duplicate = set()
         for directory, dirs, files in os.walk(self.root, followlinks=False):
-            dirs[:] = sorted(d for d in dirs if not d.startswith('.') and d.casefold() not in EXCLUDED_DIRS and not (Path(directory) / d).is_symlink())
+            dirs[:] = sorted(d for d in dirs if not d.startswith('.') and d.casefold() not in EXCLUDED_DIRS
+                             and not sensitive_dir(d) and not (Path(directory) / d).is_symlink())
             for name in sorted(files):
                 if name.startswith('.') or not name.lower().endswith('.md') or name.casefold() in EXCLUDED_FILES or name.casefold().startswith('setup-'):
                     continue
@@ -441,9 +458,13 @@ class SyncEngine:
                 try:
                     self._path(relative, existing=True)
                     raw = path.read_bytes()
-                    metadata, body = parse(raw.decode('utf-8'))
+                    # A BOM hid the frontmatter, so a `visibility: private` note was indexed as internal.
+                    metadata, body = parse(raw.decode('utf-8').removeprefix('\ufeff'))
                     if metadata.get('kind') == 'task' and body.lstrip().startswith('---'):
                         raise ValueError('task has embedded frontmatter; reconcile metadata and body explicitly')
+                    if CONFLICT_MARKERS.search(body):
+                        # Both sides of an unresolved merge would enter the context as one note.
+                        raise ValueError('unresolved git conflict markers; resolve the merge to index this note again')
                     if metadata.get('kind') == 'receipt' or metadata.get('generated') is True:
                         continue
                     record = dict(metadata, source=relative, text=body)

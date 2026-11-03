@@ -350,6 +350,11 @@ def parser():
     receipt = sub.add_parser("receipt", help="Submit an idempotent source-linked receipt")
     receipt.add_argument("--file", default="-", help="JSON input path, or - for stdin")
     receipt.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), default="codex")
+    receipt.add_argument("--event-id", help="Without --file: stable id of this outcome")
+    receipt.add_argument("--summary", help="Without --file: what was done, verified and left open")
+    receipt.add_argument("--summary-file", help="Without --file: UTF-8 file holding the summary")
+    receipt.add_argument("--ref", action="append", default=[], help="Without --file: vault-relative source (repeatable)")
+    receipt.add_argument("--session", help="Without --file: the Receipt session value from the hook context")
     update = sub.add_parser("task-update", help="Update task with expected revision")
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
     history = sub.add_parser("history", help="Read ordered revision snapshots for a record")
@@ -787,7 +792,13 @@ def main(argv=None):
                 handler = assess_memory
             result = handler(sync.store, json.loads(raw), project=args.project)
         elif args.command == "receipt":
-            payload = read_json(args.file)
+            if args.event_id:
+                summary = Path(args.summary_file).read_text(encoding="utf-8") if args.summary_file else args.summary
+                if not summary or not args.ref:
+                    raise ValueError("--event-id needs --summary (or --summary-file) and at least one --ref")
+                payload = {"event_id": args.event_id, "summary": summary, "refs": args.ref, "session": args.session}
+            else:
+                payload = read_json(args.file)
             result = sync.receipt(payload["event_id"], payload["summary"],
                                           payload["refs"], args.harness, session=payload.get('session'))
         elif args.command == "history":

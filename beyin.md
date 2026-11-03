@@ -24,14 +24,13 @@ rastgele indirme siteleri kullanma.
 
 ## 2. Kaynagi al
 
-Depo private olabilir. Kullanicinin oturum acmis `gh` veya git kimligiyle, vault DISINDA
-gecici bir klasore klonla:
+Depo herkese aciktir. Vault DISINDA gecici bir klasore klonla:
 
 ```sh
-gh repo clone YusufDemir0/ctxbrain "<gecici-klasor>/ctxbrain"
+git clone https://github.com/YusufDemir0/ctxbrain.git "<gecici-klasor>/ctxbrain"
 ```
 
-Klon basarisizsa kullanicidan erisim veya yerel bir kopya yolu iste; baska kaynaga gecme.
+Klon basarisizsa kullanicidan yerel bir kopya yolu iste; baska kaynaga gecme.
 
 ## 3. Kur
 
@@ -45,14 +44,19 @@ kullanici dosyasi varsa dur ve kullaniciya sor. Kurulum ciktisinda `status: inst
 `companion` ve `skills.conflicts` alanlarini kontrol et. Mevcut bir kurulumu guncellerken
 notlarini silme; installer yedek ve geri alma kurallarini kendisi uygular.
 
-## 4. Saglik kontrolu
+## 4. Resmi paket ve saglik kontrolu
 
-Vault klasorunde:
+Git kopyasindan kurulum surumu `3.0.0` olarak damgalar. Vault klasorunde once resmi paketi kur,
+sonra sagligi kontrol et:
 
 ```sh
+python3 beyin.py update
 python3 beyin.py doctor
 python3 beyin.py preferences
 ```
+
+`update` ag gerektirir ve paketi SHA-256 ile dogrular; basarisizsa nedenini kullaniciya soyle,
+kurulum yine de calisir durumdadir.
 
 `needs_attention` gorursen nedenini kullaniciya acikla.
 
@@ -67,5 +71,11 @@ python3 beyin.py preferences
   `.agents/skills/beyin/SKILL.md` altindadir.
 - Yakalananlari yonetmek: `ctx: liste`, `ctx: unut son`, `ctx: kaydet <cumle>`,
   `ctx: kapat` / `ctx: ac`.
+- Proje sozlugu: `python3 beyin.py refleks sozluk --olustur` proje klasorlerinden sozlugu
+  uretir. Kullaniciyla birlikte her projeye gunluk dilde kullandigi takma adlari
+  `<companion>/Refleksler/_sozluk.md` dosyasina ekle; refleksler ve baglam kapisi projeleri
+  bununla tanir.
+- Eski kurallar: `Kurallar.md` uzunsa once `python3 beyin.py refleks gocet` (kuru calistirma)
+  ciktisini kullaniciya goster; onaylarsa `--uygula` (once arsive tam yedek alinir).
 
 Gecici klonu kurulumdan sonra silebilirsin; vault onu kullanmaz.

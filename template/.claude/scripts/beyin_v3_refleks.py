@@ -337,16 +337,23 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
         _prune_sessions(state)
     projects = dict(record.get('projects', {}))
     delivered = dict(record.get('delivered', {}))
-    if not reflexes and not projects:
+    if not reflexes and not projects and not (folder(vault) / DICTIONARY).is_file():
         return ''
     entries = dictionary(vault)
     if event == 'UserPromptSubmit':
         projects = {k: v - 1 for k, v in projects.items() if v - 1 > 0}
         for key in scopes_in(prompt, entries):
             projects[key] = SESSION_TURNS
+    touched = list(record.get('touched', []))
     for path in paths:
         for key in scopes_in_path(vault, path, entries):
             projects[key] = SESSION_TURNS
+        try:
+            shown_path = Path(path).resolve().relative_to(Path(vault).resolve()).as_posix()
+        except (OSError, ValueError):
+            shown_path = str(path)
+        if shown_path not in touched:
+            touched = (touched + [shown_path])[-30:]
     used = usage(state)
     folded = fold(prompt)
     fired, faded, opening_core = [], set(), []
@@ -376,7 +383,8 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
         used[reflex['id']] = today.isoformat()
     if shown:
         _write_json(Path(state) / 'refleks-kullanim.json', used)
-    _write_json(record_path, {'projects': projects, 'delivered': delivered})
+    record.update(projects=projects, delivered=delivered, touched=touched)  # keeps the gate's `seen` and `receipt`
+    _write_json(record_path, record)
     text = ''
     if lines:
         active = ', '.join(sorted(projects)) or 'genel'
@@ -557,3 +565,117 @@ def migrate(vault, apply=False, today=None):
     summary.update({'uygulandi': True, 'arsiv': archive.relative_to(Path(vault).resolve()).as_posix(),
                     'olusturulan': created})
     return summary
+
+
+# ---------- per-turn retrieval gate ----------
+
+# Conversational filler that carries no topic: a turn made only of these gets no retrieval.
+CHAT = frozenset('tamam devam et evet hayir olur peki yap bak simdi hadi sonra ok okay yes no thanks '
+                 'tesekkurler sagol eyvallah anladim harika guzel super iyi olsun aynen kanka abi '
+                 'lutfen bunu sunu onu sen ben biz'.split())
+
+
+def low_content(prompt):
+    """True for "1", "2.", "tamam devam et": nothing in the turn a search could be about."""
+    content = [w for w in words(prompt) if len(w) > 2 and not w.isdigit() and w not in STOP and w not in CHAT]
+    return not content
+
+
+def record_scopes(record, entries):
+    """The project a retrieved record belongs to: its project folder, else its `project` field."""
+    source = str(record.get('source') or '')
+    parts = source.split('/')
+    if len(parts) > 2 and parts[0] in PROJECT_PARENTS and parts[1] in entries:
+        return {parts[1]}
+    project = record.get('project')
+    return scopes_in(project, entries) if isinstance(project, str) and project.strip() else set()
+
+
+def gate(vault, state, session, context, receipt=''):
+    """(context, receipt, dropped) for one turn.
+
+    Drops records already delivered this session (same id and source hash) and, when the vault
+    keeps a project dictionary, records that belong to a project that is not active in this
+    session. Records with no project always pass. The latest receipt block is said once per
+    session. Fails open: any error returns the input unchanged.
+    """
+    try:
+        record = _read_json(_session_path(state, session), {})
+        seen = record.get('seen', {})
+        active = set(record.get('projects', {}))
+        scoped = (folder(vault) / DICTIONARY).is_file()
+        entries = dictionary(vault) if scoped else {}
+        kept, dropped = [], {'tekrar': 0, 'kapsam_disi': 0}
+        for item in context.get('records', []):
+            if seen.get(str(item.get('id'))) == item.get('source_sha256'):
+                dropped['tekrar'] += 1
+                continue
+            if scoped:
+                owners = record_scopes(item, entries)
+                if owners and not owners & active:
+                    dropped['kapsam_disi'] += 1
+                    continue
+            kept.append(item)
+        if len(kept) != len(context.get('records', [])):
+            ids = {str(item.get('id')) for item in kept}
+            context = dict(context, records=kept,
+                           citations=[c for c in context.get('citations', []) if str(c.get('id')) in ids])
+        if receipt and record.get('receipt') == hashlib.sha256(receipt.encode('utf-8')).hexdigest()[:16]:
+            receipt = ''
+        return context, receipt, dropped
+    except Exception:
+        return context, receipt, {}
+
+
+def remember_delivered(state, session, records, receipt=''):
+    """Note what this turn actually delivered, so the next turn does not repeat it."""
+    try:
+        path = _session_path(state, session)
+        record = _read_json(path, {})
+        seen = record.setdefault('seen', {})
+        for item in records or []:
+            if item.get('id') is not None:
+                seen[str(item['id'])] = item.get('source_sha256')
+        if receipt:
+            record['receipt'] = hashlib.sha256(receipt.encode('utf-8')).hexdigest()[:16]
+        _write_json(path, record)
+    except Exception:
+        pass
+
+
+# ---------- closing draft ----------
+
+def closing_draft(vault, state, session, days=2, capture_session=None):
+    """What this session left behind, for the Stop reminder: the agent confirms instead of recalling.
+
+    Edited files and active projects come from the session record, the user's own decision and
+    rule sentences from today's capture notes tagged with this session. Reads only; '' if nothing.
+    """
+    try:
+        record = _read_json(_session_path(state, session), {})
+        touched = record.get('touched', [])
+        projects = sorted(record.get('projects', {}))
+        events = []
+        tag = '`' + str(capture_session or session or 'unknown')[:8] + '`'
+        from beyin_v3_capture import _directory
+        base = _directory(vault)
+        today = date.today()
+        for back in range(days - 1, -1, -1):
+            path = base / ((today - timedelta(days=back)).isoformat() + '.md')
+            if path.is_file():
+                for line in path.read_text(encoding='utf-8').splitlines():
+                    if tag in line:
+                        events.append(line.split(tag, 1)[1].strip(' ·'))
+        if not (touched or events):
+            return ''
+        parts = ['\nTaslak (bu oturumdan, doğrula ve düzelt):']
+        if projects:
+            parts.append('- Proje: ' + ', '.join(projects))
+        if touched:
+            parts.append('- Değişen dosyalar: ' + ', '.join(touched[-12:]))
+        if events:
+            parts.append('- Kullanıcının bu oturumdaki kararları/kuralları: ' + ' | '.join(e[:160] for e in events[-6:]))
+            parts.append('- Bunlardan kalıcı bir düzeltme olan varsa: `beyin.py refleks ekle "<kural>" --kapsam <proje|genel>`.')
+        return '\n'.join(parts)
+    except Exception:
+        return ''

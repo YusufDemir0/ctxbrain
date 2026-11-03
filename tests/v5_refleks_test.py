@@ -48,7 +48,7 @@ class WeightTest(unittest.TestCase):
         self.assertFalse(refleks.core_candidate(doubted, TODAY))
 
 
-class VaultTest(unittest.TestCase):
+class VaultBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='v5-refleks-test-')
         root = Path(self.tmp.name)
@@ -64,6 +64,9 @@ class VaultTest(unittest.TestCase):
 
     def fire(self, event, prompt='', paths=(), session='s1'):
         return refleks.trigger(self.vault, self.state, session, event, prompt, paths, today=TODAY)
+
+
+class VaultTest(VaultBase):
 
     def test_dictionary_matches_suffixes_and_phrases_but_not_fragments(self):
         entries = refleks.dictionary(self.vault)
@@ -160,6 +163,66 @@ class VaultTest(unittest.TestCase):
         self.assertEqual(depo['kanit'][0]['date'], '2026-10-05')
 
 
+class RetrievalGateTest(VaultBase):
+    def records(self):
+        return {'records': [
+            {'id': 'a', 'source_sha256': '1', 'source': 'projeler/magaza-erp/sevk.md'},
+            {'id': 'b', 'source_sha256': '2', 'source': 'knowledge/concepts/kapak.md', 'project': 'video-kanali'},
+            {'id': 'c', 'source_sha256': '3', 'source': 'knowledge/concepts/genel.md'},
+        ], 'citations': [{'id': 'a'}, {'id': 'b'}, {'id': 'c'}]}
+
+    def test_low_content_turns_skip_retrieval(self):
+        for prompt in ('1', '2.', '1-2-3', 'tamam devam et', 'evet', 'Teşekkürler kanka'):
+            self.assertTrue(refleks.low_content(prompt), prompt)
+        for prompt in ('sevkiyat', 'kapakları dene', 'neden böyle'):
+            self.assertFalse(refleks.low_content(prompt), prompt)
+
+    def test_records_of_inactive_projects_are_dropped_and_none_repeat(self):
+        self.fire('SessionStart')
+        self.fire('UserPromptSubmit', 'sevkiyat ekranı')
+        context, receipt, dropped = refleks.gate(self.vault, self.state, 's1', self.records(), 'R')
+        self.assertEqual([r['id'] for r in context['records']], ['a', 'c'])
+        self.assertEqual([c['id'] for c in context['citations']], ['a', 'c'])
+        self.assertEqual(dropped, {'tekrar': 0, 'kapsam_disi': 1})
+        refleks.remember_delivered(self.state, 's1', context['records'], receipt)
+        again, receipt2, dropped2 = refleks.gate(self.vault, self.state, 's1', self.records(), 'R')
+        self.assertEqual(again['records'], [])
+        self.assertEqual(receipt2, '')
+        self.assertEqual(dropped2['tekrar'], 2)
+        changed = self.records()
+        changed['records'][0]['source_sha256'] = 'edited'
+        self.assertEqual([r['id'] for r in refleks.gate(self.vault, self.state, 's1', changed)[0]['records']], ['a'])
+
+    def test_without_a_dictionary_only_repeats_are_dropped(self):
+        (self.vault / COMPANION / 'Refleksler' / '_sozluk.md').unlink()
+        context, _, dropped = refleks.gate(self.vault, self.state, 'fresh', self.records())
+        self.assertEqual(len(context['records']), 3)
+        self.assertEqual(dropped['kapsam_disi'], 0)
+
+    def test_a_new_session_hears_everything_again(self):
+        refleks.remember_delivered(self.state, 's1', self.records()['records'])
+        self.fire('SessionStart')
+        self.fire('UserPromptSubmit', 'erp ve kapak')
+        self.assertEqual(len(refleks.gate(self.vault, self.state, 's1', self.records())[0]['records']), 3)
+
+
+class ClosingDraftTest(VaultBase):
+    def test_draft_lists_this_sessions_files_projects_and_user_decisions(self):
+        self.assertEqual(refleks.closing_draft(self.vault, self.state, 'abcdef0123'), '')
+        self.fire('SessionStart', session='abcdef0123')
+        self.fire('PostToolUse', paths=[str(self.vault / 'projeler' / 'magaza-erp' / 'sevk.md')], session='abcdef0123')
+        captures = self.vault / 'knowledge' / 'yakalanan'
+        captures.mkdir(parents=True)
+        (captures / (date.today().isoformat() + '.md')).write_text(
+            '# Yakalama\n\n- 10:00 · kural · `abcdef01` · depocu kârı görmesin\n'
+            '- 10:05 · karar · `99999999` · başka oturumun kararı\n', encoding='utf-8')
+        draft = refleks.closing_draft(self.vault, self.state, 'abcdef0123')
+        self.assertIn('projeler/magaza-erp/sevk.md', draft)
+        self.assertIn('Proje: magaza-erp', draft)
+        self.assertIn('depocu kârı görmesin', draft)
+        self.assertNotIn('başka oturumun', draft)
+
+
 class TriggerGateTest(unittest.TestCase):
     def test_labelled_prompts_activate_exactly_their_scopes(self):
         sys.path.insert(0, str(ROOT / 'scripts'))
@@ -195,7 +258,55 @@ class CliTest(unittest.TestCase):
             self.assertIn('cekirdek', up.stdout.decode())
             words = run_python(vault / 'beyin.py', ['refleks', 'sozluk', '--olustur'], vault, env)
             self.assertIn('- erp:', words.stdout.decode())
+            (vault / 'not.md').write_text('# Not\n\nSonuç.\n', encoding='utf-8')
+            receipt = run_python(vault / 'beyin.py', ['receipt', '--harness', 'claude', '--event-id', 'deneme-1',
+                                                     '--summary', 'Denendi.\nÖğrenilen: yok', '--ref', 'not.md'], vault, env)
+            self.assertEqual(receipt.returncode, 0, receipt.stderr)
+            self.assertIn('succeeded', receipt.stdout.decode())
+            missing = run_python(vault / 'beyin.py', ['receipt', '--event-id', 'deneme-2', '--summary', 'x'], vault, env)
+            self.assertNotEqual(missing.returncode, 0)
 
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SyncSafetyTest(unittest.TestCase):
+    """Sensitive folders, BOM frontmatter and unresolved merges never reach the index."""
+
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / 'template/.claude/scripts'))
+        import beyin_v3_sync
+        self.tmp = tempfile.TemporaryDirectory(prefix='v5-sync-safety-')
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.vault, self.state = root / 'vault', root / 'state'
+        self.vault.mkdir()
+        self.engine = beyin_v3_sync.SyncEngine(self.vault, self.state)
+
+    def indexed(self):
+        import json
+        import sqlite3
+        self.engine.sync()
+        with sqlite3.connect(self.engine.store.database) as db:
+            return {json.loads(row[0])['source']: json.loads(row[0])
+                    for row in db.execute('SELECT payload FROM records')}
+
+    def test_sensitive_folder_names_are_skipped_by_word(self):
+        for folder in ('Şifreler', 'Özel notlar', 'Özellikler', 'Kasaba'):
+            (self.vault / folder).mkdir()
+            (self.vault / folder / 'not.md').write_text('Nebula notu.\n', encoding='utf-8')
+        sources = set(self.indexed())
+        self.assertEqual(sources, {'Özellikler/not.md', 'Kasaba/not.md'})
+
+    def test_bom_does_not_hide_private_visibility(self):
+        (self.vault / 'gizli-degil.md').write_bytes(
+            '﻿---\n{"visibility": "private"}\n---\nNebula özeli.\n'.encode('utf-8'))
+        self.assertEqual(self.indexed()['gizli-degil.md']['visibility'], 'private')
+
+    def test_conflict_markers_keep_a_note_out_until_resolved(self):
+        note = self.vault / 'karar.md'
+        note.write_text('Önce\n<<<<<<< HEAD\nA seçildi\n=======\nB seçildi\n>>>>>>> dal\n', encoding='utf-8')
+        self.assertNotIn('karar.md', self.indexed())
+        note.write_text('Önce\nA seçildi\n', encoding='utf-8')
+        self.assertIn('karar.md', self.indexed())

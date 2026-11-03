@@ -219,7 +219,9 @@ class HookWiringTest(unittest.TestCase):
     """The hook reaches the advisor only behind jev.json, and survives its failure."""
     def run_hook(self, vault, state, prompt):
         import beyin_v3_hook as hook
-        payload = json.dumps(dict(hook_event_name='UserPromptSubmit', session_id='s', prompt=prompt))
+        # One session per call: within a session v5 says each source once, and this test is about the advisor.
+        self.calls = getattr(self, 'calls', 0) + 1
+        payload = json.dumps(dict(hook_event_name='UserPromptSubmit', session_id=f's{self.calls}', prompt=prompt))
         output = io.StringIO()
         argv = ['hook', '--vault', str(vault), '--state', str(state), '--harness', 'claude']
         with patch.object(sys, 'argv', argv), patch.object(sys, 'stdin', io.StringIO(payload)), \

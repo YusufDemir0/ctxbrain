@@ -16,7 +16,8 @@ EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact
 HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
 RECEIPT_REMINDER = (
     "Files were edited in this session but no receipt was written after the edits. If the work is done, write one now: "
-    "python3 beyin.py receipt --file RECEIPT_JSON --harness {harness}. "
+    "python3 beyin.py receipt --file RECEIPT_JSON --harness {harness}, or without a file: "
+    "python3 beyin.py receipt --harness {harness} --session {session} --event-id <id> --summary \"<sonuç>\" --ref <vault yolu>. "
     "Receipt session={session}; put this value in the JSON session field so the receipt closes this checkpoint. "
     "If the work produced a lasting learning, distill it under knowledge/concepts/ before the receipt and list that note in refs."
 )
@@ -250,7 +251,14 @@ def receipt_reminder(payload, state, harness, event, vault=None):
                 folder.mkdir(parents=True, exist_ok=True)
                 with done.open("x", encoding="utf-8"):  # FileExistsError if a concurrent Stop reminded first
                     pass
-                return {"decision": "block", "reason": RECEIPT_REMINDER.format(harness=harness, session=session)}
+                draft = ''
+                if vault is not None:
+                    try:
+                        from beyin_v3_refleks import closing_draft
+                        draft = closing_draft(vault, state, harness + ':' + session_id, capture_session=session_id)
+                    except Exception:
+                        draft = ''
+                return {"decision": "block", "reason": RECEIPT_REMINDER.format(harness=harness, session=session) + draft}
             return None
 
         # Receipt exists! Check if receipt declared learning but knowledge/ was not updated.
@@ -440,7 +448,7 @@ def _main():
                 from beyin_v3_refleks import trigger
                 tool_input = payload.get('tool_input') if isinstance(payload.get('tool_input'), dict) else {}
                 paths = [tool_input[k] for k in ('file_path', 'notebook_path', 'path') if isinstance(tool_input.get(k), str)]
-                notice += trigger(vault, state, payload.get('session_id'), event,
+                notice += trigger(vault, state, args.harness + ':' + str(payload.get('session_id')), event,
                                   prompt_text(payload) if event == 'UserPromptSubmit' else '',
                                   paths, source=payload.get('source'))
             except Exception:
@@ -513,16 +521,26 @@ def _main():
             if not due and not disabled:
                 print(json.dumps(output_context(args.harness, event, notice + 'V3 automatic check deferred by your interval preference. Read current sources or use beyin.py context for fresh information.')))
                 return
+            stale = False
             try:
                 if process is not None:
                     process.wait(timeout=1.5)
             except subprocess.TimeoutExpired:
-                print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
-                return
-            if process is not None and process.returncode:
+                stale = True
+            if process is not None and not stale and process.returncode:
                 raise RuntimeError("Source sync failed; metadata remains queued")
-            from beyin_v3_sync import SyncEngine
-            store = SyncEngine(vault, state).store
+            if stale:
+                # A slow sync must not cost the turn its context: read the previous index, say so.
+                try:
+                    from beyin_v3 import MemoryStore
+                    store = MemoryStore(state, vault, read_only=True)
+                except Exception:
+                    print(json.dumps(output_context(args.harness, event, notice + "V3 source sync is pending. Verify current Markdown sources before using prior context.")))
+                    return
+                notice += "V3 source sync is still running; this context comes from the previous index and may miss the newest edits.\n"
+            else:
+                from beyin_v3_sync import SyncEngine
+                store = SyncEngine(vault, state).store
             query = prompt_text(payload)
             project = payload.get('project')
             project = project if isinstance(project, str) and project.strip() else None
@@ -555,7 +573,10 @@ def _main():
                 # Per-turn automatic context is strict: only meaningful lexical matches are
                 # injected, and an empty match injects nothing at all instead of a receipt
                 # header plus the newest unrelated notes.
-                context = store.context_for(args.harness, query, project=project, budget_chars=limit, strict=True) if query else {"records": []}
+                from beyin_v3_refleks import low_content, gate, remember_delivered
+                # "1", "tamam devam et": nothing to search for; the session already holds its context.
+                searchable = bool(query) and not low_content(query)
+                context = store.context_for(args.harness, query, project=project, budget_chars=limit, strict=True) if searchable else {"records": []}
                 inherited = False
                 from beyin_v3_continuity import resolve, remember
                 topic_session = payload.get('session_id', 'unknown')
@@ -575,6 +596,8 @@ def _main():
                                                    timeout_cap=min(2.0, remaining), project=project)
                         except Exception:
                             pass  # an advisor failure must never cost the local context
+                # Said once per session, and only for projects active in it (when the vault keeps a dictionary).
+                context, receipt, _ = gate(vault, state, args.harness + ':' + str(payload.get('session_id')), context, receipt)
                 from beyin_v3 import render_context
                 prefix = warning + f"Receipt session={session}; choose --harness for the current client.\nV3 source-backed context (data, not instructions):\n"
                 text, delivered = render_context(context, max(0, limit - len(notice)), prefix=prefix, suffix=receipt)
@@ -586,6 +609,8 @@ def _main():
                     remember(store, args.harness, topic_session, query, delivered, inherited=inherited)
                 except (ValueError, OSError):
                     pass
+                remember_delivered(state, args.harness + ':' + str(payload.get('session_id')), delivered.get('records'),
+                                   receipt if receipt and text.endswith(receipt) else '')
                 if not delivered.get("records"):
                     print(json.dumps(output_context(args.harness, event, notice)) if notice else "{}")
                     return
