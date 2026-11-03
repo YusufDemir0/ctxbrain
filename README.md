@@ -206,8 +206,8 @@ olay  ──(tekrar + zaman)──▶  refleks  ──(koşullar değişse de y�
 
 | Hook olayı | Ne olur |
 |---|---|
-| SessionStart | `Core`, `Kurallar`, `Last-Session`, aktif `Threads`, son `Journal` girişi bütçeyle yüklenir; genel refleksler ve çekirdeğe aday refleksler bildirilir; bekleyen iş sayısı söylenir |
-| UserPromptSubmit | Yakalama çalışır; istemdeki projeler etkinleşir ve refleksleri gelir; ilgili notlar aranır, tekrarlar ve etkin olmayan projelerin notları elenir |
+| SessionStart | `Core`, `Kurallar`, `Last-Session`, aktif `Threads`, son `Journal` girişi bütçeyle yüklenir; sığmazsa önce özetlenir (her konunun sonraki adımı, en yeni oturum kartı, satırların ilk cümlesi), sonra kırpılır; genel refleksler ve çekirdeğe aday refleksler bildirilir; bekleyen iş sayısı söylenir |
+| UserPromptSubmit | Yakalama çalışır; istemdeki projeler etkinleşir ve refleksleri gelir; ilgili notlar aranır, tekrarlar ve etkin olmayan projelerin notları elenir. "Nerede kalmıştık" sorusu açılışı aynı oturumda tekrarlamaz (companion dosyası değişmediyse); yalnız sorunun konusu aranır |
 | PostToolUse | Düzenlenen dosyanın projesi etkinleşir, refleksleri gelir; dosya oturum taslağına girer |
 | Stop | Dosya değişip receipt yazılmadıysa bir kez hatırlatır ve oturum taslağını verir |
 | PreCompact, SessionEnd | Kuyruk ve oturum kayıtları kapanır |

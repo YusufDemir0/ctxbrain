@@ -1,4 +1,5 @@
 """User-owned companion bootstrap and compact, source-verified session context."""
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -276,11 +277,41 @@ def fold(text):
     return ''.join(c for c in decomposed if not unicodedata.combining(c)).lower()
 
 
+# 'nerede kal' only as a first-person continuity question (#145): kargo nerede kaldı is not.
+# (?!l[ae]r) keeps kaldıkları/kaldiklarini (theirs) out; re.I already folds ı/i/I/İ, only
+# ş/s and ğ/g need ASCII spellings. 'nerelerde kaldık' is the same question.
+CONTINUITY = re.compile(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|ner(?:e|eler)?de kal(?:dık|dıydık|mıştık|dığım|dım|dıydım|mıştım|mışız|mışım|dıysak|dıysam|dik|diydik|mistik|digim|dim|diydim|mistim|misiz|misim|diysak|diysam)(?!l[ae]r)|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))')
+# Greetings and "where do we stand" words, folded: what a continuity question has left after
+# them is the topic it is about, if any.
+CONTINUITY_WORDS = frozenset('selam merhaba naber nasilsin ne neler nerede nerelerde neredeyiz kaldik son en '
+                             'durum durumdayiz durumlar alemdeyiz alem hello hey where were what did last'.split())
+
+
 def relevant(query):
-    # 'nerede kal' only as a first-person continuity question (#145): kargo nerede kaldı is not.
-    # (?!l[ae]r) keeps kaldıkları/kaldiklarini (theirs) out; re.I already folds ı/i/I/İ, only
-    # ş/s and ğ/g need ASCII spellings.
-    return bool(re.search(r'(?i)(son (oturum|konuş)|geçen (sefer|oturum|konuş)|ner(?:e)?de kal(?:dık|dıydık|mıştık|dığım|dım|dıydım|mıştım|mışız|mışım|dıysak|dıysam|dik|diydik|mistik|digim|dim|diydim|mistim|misiz|misim|diysak|diysam)(?!l[ae]r)|ne (yaptık|yapmıştık)|beni (tanı|hatırla)|kişili|tercihlerim|sen kimsin|kim olduğunu|last (session|time)|previous session|where (did we|we) leave|remember me|personality|my (preferences|name)|who (am i|are you))', query)) or bool(RETURNING.search(fold(query)))
+    return bool(CONTINUITY.search(query)) or bool(RETURNING.search(fold(query)))
+
+
+def topic(query):
+    """What a continuity question is about, for search: 'zombi'de nerede kaldık' is 'zombi',
+    'selam neler yapmıştık' is '' (the opening itself is the answer, not a lexical match)."""
+    text = RETURNING.sub(' ', fold(CONTINUITY.sub(' ', query)))
+    return ' '.join(w for w in re.split(r'[^0-9a-z]+', text) if len(w) > 2 and w not in CONTINUITY_WORDS)
+
+
+def fingerprint(vault):
+    """Short hash of the companion sources as they are on disk; '' without a single directory.
+    An opening is repeated in the same session only after one of them changes."""
+    target = directory(vault)
+    if target is None:
+        return ''
+    digest = hashlib.sha256()
+    for name in NAMES:
+        try:
+            info = (target / name).stat()
+        except OSError:
+            continue
+        digest.update(f'{name}:{info.st_size}:{info.st_mtime_ns}\n'.encode('utf-8'))
+    return digest.hexdigest()[:16]
 
 
 def stamp(header):
@@ -416,6 +447,83 @@ def ends(text, budget):
     return head + f'\n[truncated: {start - len(head)} characters omitted here; read source]\n' + closing
 
 
+KEY_LINE = re.compile(r'(?i)^\s*[-*]\s+(?:\*\*)?(?:sonraki adım|sonraki adim|next steps?|açık|acik|open)\b')
+
+
+def outline(text, width=180):
+    """Active threads as heading plus their next step and open lines (else the last line), so
+    every thread is named before any of them is cut; the rest stays in the file."""
+    blocks = re.split(r'(?m)^(?=### )', text)
+    if len(blocks) < 3:
+        return text
+    lines = [blocks[0].rstrip('\n')]
+    for block in blocks[1:]:
+        rows = block.rstrip('\n').splitlines()
+        body = [row for row in rows[1:] if row.strip()]
+        keep = [row for row in body if KEY_LINE.match(row)] or body[-1:]
+        lines.append(rows[0])
+        lines += [row if len(row) <= width else row[:width - 1].rstrip() + '…' for row in keep]
+    return '\n'.join(lines) + f'\n[{len(blocks) - 1} threads shown as next step and open items; read source]\n'
+
+
+def latest_card(text):
+    """The handoff with its newest card whole, older cards as heading and first line, and no list
+    of older card paths; everything dropped stays in the file."""
+    match = re.search(r'(?im)^## (?:Diğer kartlar|Other cards)\s*$', text)
+    listed = len(re.findall(r'(?m)^- ', text[match.end():])) if match else 0
+    cards = re.split(r'(?m)^(?=## )', text[:match.start()] if match else text)
+    kept = cards[:2]
+    for card in cards[2:]:
+        rows = [row for row in card.rstrip('\n').splitlines() if row.strip()]
+        first = next((row for row in rows[1:] if row.lstrip().startswith(('- ', '* '))), '')
+        kept.append(rows[0] + ('\n' + first if first else '') + '\n\n')
+    shorter = ''.join(kept).rstrip('\n') + '\n'
+    if len(shorter) >= len(text):
+        return text
+    return shorter + f'[older cards shortened{f", {listed} more listed" if listed else ""}; read source]\n'
+
+
+# An identity section about current work; Threads already carries it in full.
+WORK_SECTION = re.compile(r'(?i)^#+ .*\b(aktif|active|odak|focus|projeler|projects|current work)')
+
+
+def gist(text, least=60):
+    """Identity in brief: each line cut to its first sentence (one at least `least` long) and a
+    section about current work folded to its bold labels, so preferences after it are not the
+    part a head-down cut loses. Headings stay."""
+    out, labels, work = [], [], False
+
+    def fold_labels():
+        if labels:
+            at = len(out)
+            while at and not out[at - 1].strip():
+                at -= 1  # before the section's trailing blank lines
+            out.insert(at, '- ' + ' · '.join(labels) + ' (details in source)')
+            labels.clear()
+    for line in text.splitlines():
+        if line.startswith('#'):
+            fold_labels()
+            work = bool(WORK_SECTION.match(line))
+            out.append(line)
+            continue
+        label = re.match(r'\s*[-*]\s+\*\*(.+?):?\*\*', line) if work else None
+        if label:
+            labels.append(label[1].rstrip(':'))
+            continue
+        if len(line) <= least:
+            out.append(line)
+            continue
+        end = re.search(r'[.!?](?=\s)', line[least:])
+        out.append(line[:least + end.end()] if end else line)
+    fold_labels()
+    shorter = '\n'.join(out) + '\n'
+    return shorter + '[condensed to first sentences; read source]\n' if len(shorter) < len(text) else text
+
+
+# A source that does not fit whole falls back to this form before any of it is cut.
+CONDENSE = {'Threads.md': outline, 'Last-Session.md': latest_card, 'Core.md': gist}
+
+
 def clip(text, budget, tail=False, both=False):
     if len(text) <= budget:
         return text
@@ -432,6 +540,8 @@ def clip(text, budget, tail=False, both=False):
 
 def context(store, budget, session, harness, query='', receipt='', warning=''):
     """Budget actual displayed text, not repeated JSON metadata; never cut a record header."""
+    # A continuity question searches only for its topic; with none, it is answered like an opening.
+    query = topic(query) if query and relevant(query) else query
     target = directory(store.vault_root)
     hygiene_line = ''
     if target is not None:
@@ -478,6 +588,12 @@ def context(store, budget, session, harness, query='', receipt='', warning=''):
             # Rules that do not fit drop their reasons before any rule is cut (#177).
             parts = [(label, without_reasons(body) if name == 'Kurallar.md' else body, name)
                      for label, body, name in parts]
+            lengths = share(available, parts)
+        # When anything is still cut, threads, the handoff and identity first shrink to their
+        # condensed form (every thread's next step, the newest card, each line's first sentence),
+        # so a fitting card list or project detail never costs another source its head-down cut.
+        if any(lengths[i] < len(body) for i, (_, body, _) in enumerate(parts)):
+            parts = [(label, CONDENSE[name](body) if name in CONDENSE else body, name) for label, body, name in parts]
             lengths = share(available, parts)
         rendered = header + notice
         for i, (label, body, name) in enumerate(parts):

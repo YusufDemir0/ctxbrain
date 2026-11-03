@@ -38,8 +38,8 @@ class CompanionTest(unittest.TestCase):
         return self.run_cli(ROOT / 'scripts/beyin_v3.py', '--vault', self.vault, '--state', self.state, 'sync')
 
     def hook(self, event='SessionStart', harness='codex', **kwargs):
-        payload = dict(hook_event_name=event, session_id='synthetic-continuity', event_id=event,
-                       conversationId='synthetic-continuity', invocationNum=0, **kwargs)
+        payload = dict(dict(hook_event_name=event, session_id='synthetic-continuity', event_id=event,
+                            conversationId='synthetic-continuity', invocationNum=0), **kwargs)
         output = self.run_cli(ROOT / 'template/.claude/scripts/beyin_v3_hook.py',
                               '--vault', self.vault, '--state', self.state, '--harness', harness, payload=payload)
         return output.get('hookSpecificOutput', {}).get('additionalContext', '') if harness != 'antigravity' else output.get('injectSteps', [{}])[0].get('ephemeralMessage', '')
@@ -101,13 +101,14 @@ class CompanionTest(unittest.TestCase):
         text = self.hook()
         for canary in ('IDENTITY_CANARY', 'STYLE_CANARY', 'CORRECTION_CANARY', 'HANDOFF_CANARY', 'THREAD_BODY_CANARY', 'LATEST_JOURNAL_CANARY'):
             self.assertIn(canary, text)
-        self.assertIn('truncated: read source', text)
+        self.assertIn('read source', text)  # condensed or cut, the file is named for the rest
         self.assertLessEqual(len(text), 2000)
 
     def test_relational_question_restores_context_without_lexical_overlap(self):
         self.seed()
-        for prompt in ('Beni tanıyor musun? Geçen sefer nerede kalmıştık?', 'What did we do last time?'):
-            text = self.hook('UserPromptSubmit', prompt=prompt)
+        for number, prompt in enumerate(('Beni tanıyor musun? Geçen sefer nerede kalmıştık?', 'What did we do last time?')):
+            # Each in a session of its own: within one session the opening is not repeated.
+            text = self.hook('UserPromptSubmit', prompt=prompt, session_id=f'relational-{number}')
             self.assertIn('IDENTITY_CANARY', text)
             self.assertIn('HANDOFF_CANARY', text)
 
@@ -146,7 +147,8 @@ class CompanionTest(unittest.TestCase):
             'SYNTHETIC_REJECTED_IDENTITY_CANARY: user prefers amber diagrams.\n',
             encoding='utf-8')
         self.sync()
-        for text in (self.hook(), self.hook('UserPromptSubmit', prompt='Beni tanıyor musun? Amber diagrams?')):
+        for text in (self.hook(), self.hook('UserPromptSubmit', prompt='Beni tanıyor musun? Amber diagrams?',
+                                            session_id='rejected-inference-question')):
             self.assertNotIn('SYNTHETIC_REJECTED_IDENTITY_CANARY', text)
             self.assertIn('STYLE_CANARY', text)
 

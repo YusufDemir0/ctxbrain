@@ -654,6 +654,26 @@ def remember_delivered(state, session, records, receipt=''):
         pass
 
 
+def opening_given(state, session, mark):
+    """True when this session's opening already carried the companion sources as they are now
+    (mark: their fingerprint), so a "where were we" question does not repeat it. Fails closed."""
+    try:
+        return bool(mark) and _read_json(_session_path(state, session), {}).get('opening') == mark
+    except Exception:
+        return False
+
+
+def remember_opening(state, session, mark):
+    """Note which state of the companion sources this session's opening carried."""
+    try:
+        path = _session_path(state, session)
+        record = _read_json(path, {})
+        record['opening'] = mark
+        _write_json(path, record)
+    except Exception:
+        pass
+
+
 # ---------- closing draft ----------
 
 def closing_draft(vault, state, session, days=2, capture_session=None):

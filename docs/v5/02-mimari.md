@@ -132,6 +132,26 @@ projeye ait kurallar kendi refleks dosyalarına taşınır (kanıtı kuralın or
 genel kurallar `Kurallar.md`'de kalır. Varsayılan kuru çalıştırmadır, `--uygula` önce dosyanın
 tam metnini arşive yedekler. Hiçbir şey silinmez.
 
+### Açılış (5.0.3)
+
+Açılış, companion dosyalarını istemcinin kesme sınırının altında (Claude Code için 10.000
+karakter) taşır. Gerçek bir vault'ta kaynaklar 17,9 bin karakterdi; 9.000 bütçede baştan kırpma
+`Threads`'in 9 konusundan yalnız ilk ikisini, `Core`'un ise kimlik ve aktif alanlarını verip
+kalıcı tercihlerini düşürüyordu. Artık bir kaynak sığmazsa, hiçbiri kırpılmadan önce üçü
+özetlenir:
+
+- `Threads`: her konunun başlığı ile "Sonraki adım" ve "Açık" satırları (yoksa son satırı).
+- `Last-Session`: en yeni kart tam, eskiler başlık ve ilk satır; eski kart listesi çıkar.
+- `Core`: her satırın ilk cümlesi; aktif iş bölümü (Threads zaten taşır) kalın etiketlerine iner.
+
+Aynı vault'ta açılış 9.000 karakterde kırpmasız sığdı: 9 konunun hepsi ve tüm tercihler.
+
+"Nerede kalmıştık" türü bir soru açılışı yeniden basardı; oturumun ilk istemi çoğu zaman bu
+olduğundan neredeyse her oturum aynı 9 bin karakteri iki kez taşıyordu. Açılış, companion
+dosyalarının parmak izini oturum kaydına yazar; aynı oturumda soru gelirse ve dosyalar
+değişmediyse açılış tekrarlanmaz. Sorunun aramaya giden kısmı yalnız konusudur ("zombi'de
+nerede kaldık" → "zombi"); konusu yoksa arama yapılmaz.
+
 ## Model yuvası
 
 Model gelene kadar her yuvanın deterministik bir karşılığı var:

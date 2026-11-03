@@ -133,7 +133,8 @@ class PreferencesTest(unittest.TestCase):
         saved = self.cli('preferences', '--companion-context-chars', '24000')
         self.assertIn('9500', saved['client_context_notice'])
         def context(harness, event, prompt=None):
-            payload = {'hook_event_name': event, 'session_id': 'synthetic-' + harness, 'event_id': event + harness}
+            # A session per event: a continuity question does not repeat its own session's opening.
+            payload = {'hook_event_name': event, 'session_id': 'synthetic-' + harness + event, 'event_id': event + harness}
             if prompt:
                 payload['prompt'] = prompt
             r = subprocess.run([sys.executable, str(ROOT / 'template/.claude/scripts/beyin_v3_hook.py'),
