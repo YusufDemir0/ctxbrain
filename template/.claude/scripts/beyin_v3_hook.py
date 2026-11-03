@@ -368,11 +368,14 @@ def main():
     try:
         _main()
     finally:
-        for vault, state, prompt, session in _PENDING_CAPTURE:
+        for vault, state, prompt, session, reflex_session in _PENDING_CAPTURE:
             try:
-                from beyin_v3_capture import capture, enabled
+                from beyin_v3_capture import capture, enabled, statements
                 if enabled(state):
                     capture(vault, state, prompt, session)
+                    # The user's own sentences strengthen the reflexes they restate (event -> reflex).
+                    from beyin_v3_refleks import absorb
+                    absorb(vault, state, reflex_session, statements(prompt))
             except Exception:
                 pass  # capture can never cost the turn
 
@@ -494,7 +497,8 @@ def _main():
         # would copy prompts from unrelated projects into this vault.
         if (not args.metadata_only and not is_synthetic_prompt(payload) and
                 (event == 'UserPromptSubmit' or (event == 'SessionStart' and args.harness in ('hermes', 'opencode', 'antigravity')))):
-            _PENDING_CAPTURE.append((vault, state, prompt_text(payload), payload.get('session_id')))
+            _PENDING_CAPTURE.append((vault, state, prompt_text(payload), payload.get('session_id'),
+                                     args.harness + ':' + str(payload.get('session_id'))))
         if not settings['auto_sync']:
             print(json.dumps(output_context(args.harness, event, notice)) if notice else ('{"decision":"stop"}' if args.harness == 'antigravity' else '{}'))
             return

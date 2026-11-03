@@ -1,5 +1,6 @@
 """Reflexes: evidence weight, fading, core candidacy, scoped triggering and Kurallar.md migration."""
 from datetime import date, timedelta
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -323,3 +324,68 @@ class CarryOverTest(VaultBase):
         self.assertIn('Mağaza kuralı', self.fire('UserPromptSubmit', 'sevkiyatta başka ne vardı'))
         record = refleks._read_json(refleks._session_path(self.state, 's1'), {})
         self.assertIn('magaza-erp', record['projects'])  # still open for the retrieval gate
+
+
+class HookEndToEndTest(unittest.TestCase):
+    """Through the installed hook: reflexes fire in scope, captured sentences strengthen them,
+    unknown rules come back as suggestions at the next session start."""
+
+    def hook(self, payload):
+        result = run_python(self.vault / '.claude/scripts/beyin_v3_hook.py',
+                            ['--vault', self.vault, '--state', self.state, '--harness', 'claude'],
+                            self.vault, self.env, dict(payload, cwd=str(self.vault)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout or b'{}')
+        return out.get('hookSpecificOutput', {}).get('additionalContext', '')
+
+    def test_reflexes_fire_strengthen_and_suggest_through_the_hook(self):
+        with tempfile.TemporaryDirectory(prefix='v5-hook-e2e-') as t:
+            root = Path(t); self.vault = root / 'vault'; self.vault.mkdir(); self.state = root / 'state'
+            self.env = dict(isolated_env(root / 'home'), BEYIN_V3_NO_SPAWN='1')
+            self.assertEqual(install(self.vault, self.state, self.env).returncode, 0)
+            (self.vault / 'projeler' / 'magaza-erp').mkdir(parents=True)
+            cli = lambda *a: run_python(self.vault / 'beyin.py', list(a), self.vault, self.env)
+            cli('refleks', 'sozluk', '--olustur')
+            words = self.vault / COMPANION / 'Refleksler' / '_sozluk.md'
+            words.write_text(words.read_text(encoding='utf-8').replace('- magaza-erp:', '- magaza-erp: erp, sevkiyat,'),
+                             encoding='utf-8')
+            added = cli('refleks', 'ekle', 'ERP panelinde Telegram botu gün sonu satış raporunu göndermeli',
+                        '--kapsam', 'magaza-erp', '--tur', 'kural')
+            rid = added.stdout.decode().split(':')[0]
+
+            self.hook({'hook_event_name': 'SessionStart', 'session_id': 'e2e-1', 'source': 'startup'})
+            self.assertNotIn('Telegram', self.hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'e2e-1',
+                                                    'prompt': 'git geçmişini nasıl temizlerim?'}))
+            turn = self.hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'e2e-1',
+                              'prompt': 'ERP panelinde Telegram botu gün sonu satış raporunu göndermeli, unutma.'})
+            self.assertIn('Telegram botu', turn)
+            self.assertIn('etkin kapsam: magaza-erp', turn)
+            reflex = (self.vault / COMPANION / 'Refleksler' / (rid + '.md')).read_text(encoding='utf-8')
+            self.assertIn('· tekrar ·', reflex)  # the captured restatement became evidence
+
+            self.hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'e2e-1',
+                       'prompt': 'Bundan sonra müşteri listesinde telefonu her zaman maskele, unutma.'})
+            opening = self.hook({'hook_event_name': 'SessionStart', 'session_id': 'e2e-2', 'source': 'startup'})
+            self.assertIn('Refleks önerileri', opening)
+            self.assertIn('telefonu her zaman maskele', opening)
+            again = self.hook({'hook_event_name': 'SessionStart', 'session_id': 'e2e-3', 'source': 'startup'})
+            self.assertNotIn('telefonu her zaman maskele', again)  # said once
+
+
+class AbsorbTest(VaultBase):
+    def test_strong_match_is_evidence_likely_match_is_a_suggestion(self):
+        rid = refleks.ekle(self.vault, 'Web sitesine eklenen ürün görsel ve fiyat varsa kendiliğinden yayına girer',
+                           ['magaza-erp'], 'kural', tarih=day(10))['id']
+        self.fire('SessionStart')
+        self.fire('UserPromptSubmit', 'erp')
+        res = refleks.absorb(self.vault, self.state, 's1', [
+            ('kural', 'Web sitesine eklenen ürün görsel ve fiyat varsa kendiliğinden yayına girer, unutma'),
+            ('karar', 'web ürünü eklenince fiyat görsel kontrolü yapılsın sonra yayın'),
+            ('karar', 'bugün öğlen toplantı var')])
+        self.assertEqual(res['kanit'], [rid])
+        kinds = [e['type'] for e in refleks.load(self.vault)[0]['kanit']]
+        self.assertEqual(kinds, ['kural', 'tekrar'])
+        lines = refleks.suggestions(self.state, 's1')
+        self.assertEqual(len(lines), 1)
+        self.assertIn(f'--refleks {rid} --tur tekrar', lines[0])
+        self.assertEqual(refleks.suggestions(self.state, 'baska-oturum'), [])

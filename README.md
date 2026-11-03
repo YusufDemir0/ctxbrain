@@ -48,7 +48,8 @@ dışında, `~/.local/state/beyin-v3/` altında tutulur.
 - **Seni bağlama göre hatırlar (refleksler).** Bir düzeltmen ("depocu kârı görmesin") o projeye
   ait bir **refleks** olur ve yalnız o proje konuşulurken ya da o projenin dosyasına
   dokunulurken yüklenir. Aynı şeyi tekrar söylersen yeni bir satır değil, daha güçlü bir refleks
-  olur. Kullanılmayan refleks zamanla söner ama silinmez; projesine döndüğünde "eski, doğrula"
+  olur; yakalanan cümlen bir refleksi açıkça tekrar ediyorsa kanıt kendiliğinden eklenir, emin
+  olunamayanlar ajana öneri olarak gider. Kullanılmayan refleks zamanla söner ama silinmez; projesine döndüğünde "eski, doğrula"
   işaretiyle geri gelir. Zaman geçtiği ve koşullar değiştiği halde yönü değişmeyen refleks
   **çekirdeğe** yükselir.
 - **Konuşurken karar yakalar.** Karar ve kural bildiren cümlelerin ("…kullanalım", "…olmamalı",

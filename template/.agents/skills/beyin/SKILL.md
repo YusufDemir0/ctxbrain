@@ -47,7 +47,10 @@ de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerind
   dokunulan dosya, son birkaç tur) yüklenir; genel refleksler ve çekirdek her zaman. Tetiklenen
   refleksler çelişirse en olasıyı öner, alternatifi söyle; geri alınamaz işte sor, geri alınabilir
   işte "şunu seçtim" diye bildir. Hook "çekirdeğe aday" derse ve uygunsa
-  `beyin.py refleks yukselt <id>` çalıştır ve kullanıcıya söyle. Tek seferlik biçim isteğini
+  `beyin.py refleks yukselt <id>` çalıştır ve kullanıcıya söyle. Hook "Refleks önerileri"
+  verirse (yakalanan bir cümle bir refleksi tekrar ediyor olabilir ya da henüz refleks olmayan bir
+  kural): gerçekten kalıcı bir kural ya da aynı refleksin tekrarı olanları uygula, o anki iş
+  talimatı olanları atla ve hangisini neden seçtiğini kısaca söyle. Tek seferlik biçim isteğini
   refleks yapma. `Kurallar.md` eski kuralları tutar ve her oturum başında yüklenir; tek projeye ait
   kuralları `beyin.py refleks gocet` (önce kuru çalıştırma, sonra `--uygula`) reflekse taşır.
 - Core.md / Soul.md: kullanıcı hakkında yeni, kalıcı ve açıkça desteklenen tercih varsa

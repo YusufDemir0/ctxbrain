@@ -110,7 +110,16 @@ geri alınabilir işte ilerler ama "şu seçeneklerden şunu seçtim" diye bildi
 ### Olay kaydı
 
 - Otomatik yakalama (mevcut `beyin_v3_capture`) her istemde karar ve kural cümlelerini olay
-  olarak yazar. Ajanın hatırlamasına bağlı değildir.
+  olarak yazar. Ajanın hatırlamasına bağlı değildir. Aynı turda her cümle, kapsamdaki
+  reflekslerle karşılaştırılır (kök örtüşmesi):
+  - **Kesin** (en az 0,6 kapsama ve 5 ortak kök): refleksin kendisine `tekrar` kanıtı eklenir.
+  - **Olası** (0,35 ve 4): ajana öneri olarak gider; ajan doğrularsa kanıtı ekler.
+  - **Hiçbir reflekse benzemeyen kural cümlesi:** "refleks adayı" önerisi.
+
+  Öneriler o oturumun kapanış taslağında ve bir sonraki oturum başında (en çok 3, her biri bir
+  kez) söylenir. Gerçek bir vault'un 43 yakalamasında kesin eşleşme 1/1, olası eşleşme 4/4
+  doğruydu; adayların bir kısmı kural değil o anki iş talimatıydı, bu yüzden adaylar yalnız
+  öneridir. Bu ayrım, model yuvasının ilk işidir.
 - Kullanıcı ajanı düzelttiğinde ajan `beyin.py refleks ekle "<kural>" --kapsam <proje|genel>
   --tur düzeltme` çalıştırır. Komut benzer refleksleri gösterir; aynı anlamdaysa ajan yeni refleks
   açmak yerine `--refleks <id>` ile mevcut olana kanıt ekler. Böylece aynı kural ikinci kez

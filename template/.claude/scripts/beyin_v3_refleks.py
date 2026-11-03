@@ -337,7 +337,8 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
         _prune_sessions(state)
     projects = dict(record.get('projects', {}))
     delivered = dict(record.get('delivered', {}))
-    if not reflexes and not projects and not (folder(vault) / DICTIONARY).is_file():
+    if (not reflexes and not projects and not (folder(vault) / DICTIONARY).is_file()
+            and not (Path(state) / SUGGESTIONS).is_file()):
         return ''
     entries = dictionary(vault)
     fresh = set()  # scopes named or touched in this very event
@@ -395,6 +396,11 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
         active = ', '.join(sorted(projects)) or 'genel'
         text += (f'Refleksler (etkin kapsam: {active}; kullanıcının kanıtla ağırlıklanmış davranışları, '
                  'çelişirse en olasıyı öner ve alternatifi söyle):\n' + '\n'.join(lines) + '\n')
+    if event == 'SessionStart':
+        pending = suggestions(state, take=True)
+        if pending:
+            text += ('Refleks önerileri (önceki oturumlarda yakalanan cümlelerden; kullanıcıyla doğrula, '
+                     'uygunsa uygula ve hangisini seçtiğini söyle):\n' + '\n'.join(pending) + '\n')
     if opening_core:
         names = ', '.join(r['id'] for r in opening_core)
         text += (f'Refleks çekirdeğe aday (zaman ve tekrarla yönü değişmedi): {names}. '
@@ -671,7 +677,8 @@ def closing_draft(vault, state, session, days=2, capture_session=None):
                 for line in path.read_text(encoding='utf-8').splitlines():
                     if tag in line:
                         events.append(line.split(tag, 1)[1].strip(' ·'))
-        if not (touched or events):
+        pending = suggestions(state, session)
+        if not (touched or events or pending):
             return ''
         parts = ['\nTaslak (bu oturumdan, doğrula ve düzelt):']
         if projects:
@@ -681,6 +688,91 @@ def closing_draft(vault, state, session, days=2, capture_session=None):
         if events:
             parts.append('- Kullanıcının bu oturumdaki kararları/kuralları: ' + ' | '.join(e[:160] for e in events[-6:]))
             parts.append('- Bunlardan kalıcı bir düzeltme olan varsa: `beyin.py refleks ekle "<kural>" --kapsam <proje|genel>`.')
+        if pending:
+            parts.append('- Refleks önerileri (yakalamadan):')
+            parts += ['  ' + line for line in pending]
         return '\n'.join(parts)
     except Exception:
         return ''
+
+
+# ---------- capture -> reflex evidence ----------
+
+STRONG = (0.6, 5)        # containment, shared roots: the same rule said again, added on its own
+LIKELY = (0.35, 4)       # probably the same rule: the agent confirms before it counts
+SUGGESTIONS = 'refleks-oneriler.json'
+MAX_SUGGESTIONS = 20
+
+
+def _match(sentence, reflex):
+    a, b = roots(sentence), roots(reflex['metin'])
+    if not a or not b:
+        return 0.0, 0
+    shared = len(a & b)
+    return shared / min(len(a), len(b)), shared
+
+
+def absorb(vault, state, session, found, today=None):
+    """Turn the user's captured sentences into reflex evidence.
+
+    `found` is the capture's [(kind, sentence)]. A sentence that clearly restates a reflex in scope
+    becomes `tekrar` evidence at once; a probable match, or a rule sentence that matches no reflex,
+    is queued as a suggestion the agent sees at the closing draft and the next session start.
+    Returns {'kanit': [...ids], 'oneri': n}. Never raises past the hook.
+    """
+    result = {'kanit': [], 'oneri': 0}
+    try:
+        today = today or date.today()
+        reflexes = load(vault)
+        record = _read_json(_session_path(state, session), {})
+        entries = dictionary(vault) if (folder(vault) / DICTIONARY).is_file() else {}
+        queue_path = Path(state) / SUGGESTIONS
+        queue = _read_json(queue_path, [])
+        for kind, sentence in found:
+            if kind not in ('kural', 'karar'):
+                continue
+            scopes = set(record.get('projects', {})) | (scopes_in(sentence, entries) if entries else set())
+            pool = [r for r in reflexes if not r['kapsam'] or set(r['kapsam']) & scopes]
+            best = max(((_match(sentence, r), r) for r in pool), key=lambda item: item[0], default=None)
+            (score, shared), reflex = best if best else ((0.0, 0), None)
+            if reflex and score >= STRONG[0] and shared >= STRONG[1]:
+                if all(e['text'] != sentence for e in reflex['kanit']):
+                    reflex['kanit'].append({'date': today.isoformat(), 'type': 'tekrar', 'text': sentence + ' (yakalandı)'})
+                    _atomic(reflex['path'], render(reflex))
+                    result['kanit'].append(reflex['id'])
+                continue
+            if reflex and score >= LIKELY[0] and shared >= LIKELY[1]:
+                item = {'tur': 'olasi_tekrar', 'refleks': reflex['id'], 'metin': sentence}
+            elif kind == 'kural':
+                item = {'tur': 'aday', 'kapsam': sorted(scopes), 'metin': sentence}
+            else:
+                continue
+            if all(q.get('metin') != sentence for q in queue):
+                queue.append(dict(item, oturum=hashlib.sha256(str(session).encode('utf-8')).hexdigest()[:12],
+                                  tarih=today.isoformat()))
+                result['oneri'] += 1
+        if result['oneri']:
+            _write_json(queue_path, queue[-MAX_SUGGESTIONS:])
+    except Exception:
+        pass
+    return result
+
+
+def _suggestion_line(item):
+    if item['tur'] == 'olasi_tekrar':
+        return (f"- «{item['metin'][:140]}» `{item['refleks']}` refleksini tekrar ediyor olabilir; aynıysa "
+                f"`beyin.py refleks ekle \"<metin>\" --refleks {item['refleks']} --tur tekrar`")
+    scope = item['kapsam'][0] if len(item.get('kapsam', [])) == 1 else '<proje|genel>'
+    return f"- «{item['metin'][:140]}» henüz refleks değil; kalıcı bir kuralsa `beyin.py refleks ekle \"<kural>\" --kapsam {scope} --tur kural`"
+
+
+def suggestions(state, session=None, take=False, limit=3):
+    """Pending suggestions as hook lines. With a session: only that session's. take=True removes
+    the returned ones, so each suggestion is said once."""
+    path = Path(state) / SUGGESTIONS
+    queue = _read_json(path, [])
+    key = hashlib.sha256(str(session).encode('utf-8')).hexdigest()[:12] if session else None
+    picked = [q for q in queue if key is None or q.get('oturum') == key][:limit]
+    if take and picked:
+        _write_json(path, [q for q in queue if q not in picked])
+    return [_suggestion_line(q) for q in picked]
