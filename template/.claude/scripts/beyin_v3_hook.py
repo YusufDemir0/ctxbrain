@@ -427,6 +427,13 @@ def _main():
         if event == 'SessionStart' and not args.metadata_only:
             from beyin_v3_releases import session_start
             notice = session_start(vault, state)
+        if (not args.metadata_only and event in ('SessionStart', 'UserPromptSubmit')
+                and not (event == 'UserPromptSubmit' and is_synthetic_prompt(payload))):
+            try:
+                from beyin_v3_yapilacaklar import hook_notice
+                notice += hook_notice(vault, event, prompt_text(payload) if event == 'UserPromptSubmit' else '')
+            except Exception:
+                pass  # a to-do hint can never cost the turn
         settings = read(vault)
         if not args.metadata_only and event in ('SessionStart', 'PostToolUse') and (state / 'hygiene.json').is_file():
             # Opt-in hygiene signals (#130), machine-local in state/hygiene.json. Independent of the

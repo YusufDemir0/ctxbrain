@@ -28,6 +28,13 @@ Python 3.11+ yeterli. Sunucu, API anahtarı, pip paketi veya model çağrısı y
   ("postgres" ↔ "PostgreSQL").
 - **İlgili notu getirir.** Her mesajda sorunla ilgili notlar sınırlı bir bağlam olarak
   eklenir; ajan ayrıca `beyin.py context` ile açıkça arayabilir.
+- **Paralel oturumlar birbirini ezmez.** Her oturum kendi kartını
+  `🔮 850-Companion/Oturumlar/` altına yazar; `Last-Session.md` bu kartlardan üretilen kısa
+  özettir. İki terminal, iki ajan ya da iki makine aynı anda çalışsa da devir notu kaybolmaz.
+- **Yapılacaklar listesi.** "Bunu yapılacaklara ekle" dediğinde ajan işi yapmaz,
+  `Yapılacaklar.md`'ye tarih ve kimlikle kaydeder. "Yapılacakları uygula" dediğinde
+  bekleyenleri yapar ve her birini sonucuyla "Uygulanan işlemler" bölümüne taşır. Oturum
+  başında bekleyen iş sayısı hatırlatılır.
 
 ## Nerede işe yarar
 
@@ -48,10 +55,13 @@ cd ctxbrain
 python3 scripts/install_v3.py --vault "/tam/yol/Vault"
 ```
 
-Windows'ta `python3` yerine `py -3`. Kurulum yalnız vault içine yazar, global ayarlara
+Vault klasörü boş bir klasör de olabilir, Obsidian vault'un da. Windows'ta `python3` yerine `py -3`. Kurulum yalnız vault içine yazar, global ayarlara
 dokunmaz; makineye özel durum `~/.local/state/beyin-v3/` altında tutulur. Sonra vault
 klasörünü Claude Code'da aç, workspace güvenini onayla ve yeni bir oturum başlat.
 Bir ajana kurdurmak için: [beyin.md](beyin.md).
+
+Git kopyasından kurulum sürümü `3.0.0` olarak kaydeder. Kurulumdan sonra vault klasöründe
+`python3 beyin.py update` çalıştırırsan resmi sürüm paketi kurulur ve sürüm doğru görünür.
 
 ## Kullanım
 
@@ -77,9 +87,24 @@ python3 beyin.py context "hangi veritabanını seçtik"   # açık arama
 python3 beyin.py doctor                                 # sağlık kontrolü
 python3 beyin.py recap --days 7                         # son işler
 python3 beyin.py preferences --profile economical       # daha az otomatik bağlam
+python3 beyin.py yapilacak liste                        # bekleyen işler
+python3 beyin.py yapilacak ekle --proje web "giriş sayfasını düzelt"
+python3 beyin.py oturum liste                           # oturum kartları
+python3 beyin.py update                                 # yeni sürüme güncelle
 ```
 
 Yakalanan dosyalar düz Markdown'dır; Obsidian'da düzenleyebilir veya silebilirsin.
+
+### Birden çok makine
+
+Vault'u özel bir git deposunda tutup her makinede ayrı kurabilirsin; makineye özel durum
+vault dışında kaldığı için çakışmaz ([docs/v3/MULTI-MACHINE.md](docs/v3/MULTI-MACHINE.md)).
+Vault köküne şu satırı içeren bir `.gitattributes` eklemek, iki makinenin aynı nota yazdığı
+durumda birleştirmeyi iki tarafın satırlarını da tutarak çözer:
+
+```
+*.md merge=union
+```
 
 ## Geliştirme
 

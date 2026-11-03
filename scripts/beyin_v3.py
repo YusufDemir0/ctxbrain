@@ -238,7 +238,26 @@ def parser():
     sub.add_parser("doctor", help="Read local hook health and pending metadata counts")
     ctx = sub.add_parser("ctx", help='Manage captured decisions: liste, unut <n|son|kelime>, kaydet <cümle>, kapat, aç')
     ctx.add_argument("words", nargs="*")
-    recap = sub.add_parser("recap", help="Read recent source-linked outcomes without a model call")
+    oturum = sub.add_parser("oturum", help="Per-session cards; Last-Session.md is rebuilt from them")
+    oturum_sub = oturum.add_subparsers(dest="oturum_command", required=True)
+    oturum_yaz = oturum_sub.add_parser("yaz", help="Write or update this session's own card (body from stdin or --dosya)")
+    oturum_yaz.add_argument("--session", required=True, help="Receipt session id; the first 8 hex characters are used")
+    oturum_yaz.add_argument("--etiket", required=True)
+    oturum_yaz.add_argument("--proje")
+    oturum_yaz.add_argument("--dosya", help="Markdown body file; default stdin")
+    oturum_sub.add_parser("derle", help="Rebuild Last-Session.md from the cards")
+    oturum_sub.add_parser("liste", help="List the cards, newest first")
+    todo = sub.add_parser("yapilacak", help="Yapılacaklar.md: ekle, liste, uygulandi")
+    todo_sub = todo.add_subparsers(dest="todo_command", required=True)
+    todo_add = todo_sub.add_parser("ekle", help="Record work for later without doing it")
+    todo_add.add_argument("metin")
+    todo_add.add_argument("--proje", default="genel")
+    todo_add.add_argument("--not", dest="not_")
+    todo_sub.add_parser("liste", help="Show pending work")
+    todo_done = todo_sub.add_parser("uygulandi", help="Move finished work to the done section")
+    todo_done.add_argument("id")
+    todo_done.add_argument("--sonuc", required=True)
+    recap =sub.add_parser("recap", help="Read recent source-linked outcomes without a model call")
     recap.add_argument("--days", type=int, default=7, help="Calendar days in UTC, including today (1..366)")
     recap.add_argument("--limit", type=int, default=20, help="Maximum recent receipts to return (1..100)")
     settings = sub.add_parser("preferences", help="Control automatic local checks and injected context")
@@ -611,6 +630,32 @@ def main(argv=None):
             load_sync()  # puts the runtime directory on sys.path, from a checkout or a vault
             from beyin_v3_capture import command
             print(command(vault, state, 'ctx: ' + ' '.join(args.words), 'terminal'))
+            return 0
+        elif args.command == "oturum":
+            load_sync()
+            import beyin_v3_oturum as oturum
+            if args.oturum_command == "yaz":
+                body = Path(args.dosya).read_text(encoding="utf-8") if args.dosya else sys.stdin.read()
+                result = oturum.yaz(vault, state, args.session, args.etiket, body, proje=args.proje)
+                print(f"{result['card']} {'güncellendi' if result['updated'] else 'yazıldı'}; "
+                      f"Last-Session.md özeti: {result['shown']}/{result['cards']} kart")
+            elif args.oturum_command == "derle":
+                result = oturum.derle(vault, state)
+                print(f"Last-Session.md yeniden üretildi: {result['shown']}/{result['cards']} kart")
+            else:
+                print("\n".join(oturum.liste(vault)) or "Henüz oturum kartı yok.")
+            return 0
+        elif args.command == "yapilacak":
+            load_sync()
+            import beyin_v3_yapilacaklar as todo
+            if args.todo_command == "ekle":
+                print(todo.ekle(vault, args.metin, proje=args.proje, not_=args.not_))
+            elif args.todo_command == "liste":
+                items = todo.bekleyenler(vault)
+                print("\n".join(line for _, block in items for line in block) or "Bekleyen iş yok.")
+            else:
+                todo.uygulandi(vault, args.id, args.sonuc)
+                print(f"{args.id} uygulanan işlemlere taşındı")
             return 0
         elif args.command == "sync":
             result = sync.sync()

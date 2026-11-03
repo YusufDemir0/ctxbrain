@@ -429,17 +429,23 @@ taşınır. Mevcut kişiselleştirilmiş klasörü kullan; ikinci kimlik açma.
 cevapları Core.md'ye kaydet. Mevcut kimliği tekrar sorgulama veya şablonla değiştirme.
 
 Anlamlı bir iş parçası bittiğinde (her cevapta değil) beyin skill'indeki ilişki ve öğrenme
-protokolünü uygula: Last-Session'da oturum kartını en üste
-`## YYYY-MM-DD HH:MM · <etiket> · <session_id[:8]>` başlığıyla aç (son parça Receipt
-session kimliğinin ilk 8 karakteri), sonra yalnız kendi kartını baştan yeniden yaz
-(dosyanın tamamını yeniden yazma, başka oturumların kartını ezme, önceki oturumlar
-bölümüne dokunma), açık konuyu Threads'te yerinde güncelle, açık kullanıcı düzeltmesini
+protokolünü uygula: oturumun kendi kartını
+`python3 beyin.py oturum yaz --session <Receipt session> --etiket <etiket> --proje <proje>`
+ile yaz (gövde stdin'den; aynı oturum+etiket tekrar yazılırsa kendi kartı güncellenir).
+Last-Session.md bu kartlardan üretilen özettir, elle düzenleme; başka oturumların kartına
+dokunma. Açık konuyu Threads'te yerinde güncelle, açık kullanıcı düzeltmesini
 kapsamıyla bir iki satırlık kural olarak Kurallar'a, kalıcı öğrenimi kaynak bağlantılı
 knowledge notuna kaydet.
 Kullanıcının doğrudan söylediği tercih, karar ve olgu çıkarım değildir; istenmesini
 beklemeden kaydedilir. Core ve Journal'ı yalnız yeni ve dayanaklı bir şey olduğunda
 güncelle. Bunlar kullanıcı notlarıdır; güncellemelerde korunur. Ardından kaynak
 bağlantılı receipt gönder.
+
+Kullanıcı "yapılacaklara ekle/kaydet" derse işi uygulama;
+`python3 beyin.py yapilacak ekle --proje <proje> "<iş>" [--not "<bağlam>"]` ile kaydet.
+"Yapılacakları uygula" ya da `Y-… uygula` derse `beyin.py yapilacak liste` ile bekleyenleri
+gör, uygula ve her biri gerçekten bitince `beyin.py yapilacak uygulandi <ID> --sonuc "<ne
+yapıldı>"` çalıştır. Bu ortamda erişilemeyen işi beklemede bırak.
 
 Use Markdown source files as truth; run `python3 beyin.py sync` in the vault root when hooks
 are unavailable (`py -3 beyin.py sync` on Windows). Update tasks with expected revision.
