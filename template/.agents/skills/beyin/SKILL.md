@@ -37,11 +37,19 @@ de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerind
 - Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her
   güncellemede yeni tarihli paragraf ekleme. Biten konuyu kapalı bölümüne kısa bir satırla
   al. Başlıklardan ibaret bir listeye indirgeme. Varsayılan sınır 8.000 karakter.
-- Kurallar.md: kullanıcı açıkça düzelttiğinde kuralı bir iki satırda, tarih ve kapsamıyla kaydet.
-  Bu dosya her oturum başında karakter bütçesiyle yüklenir; uzun dosyada önce gerekçeler, sonra
-  ortadaki kurallar kırpılır. Gerekçe, kullanıcının cümlesi ve olayın anlatımı gerekiyorsa
-  companion klasöründe ayrı bir nota (ör. `Kurallar-Detay.md`) gider; kurala bağlantısını bırak.
-  Tek seferlik biçim isteğini evrensel kişilik kuralı yapma. Çelişen eski kuralı açıklayarak düzelt.
+- Refleksler (düzeltmeler ve kurallar): kullanıcı açıkça düzelttiğinde kuralı bir iki satırda
+  `python3 beyin.py refleks ekle "<kural>" --kapsam <proje|genel> --tur duzeltme` ile kaydet.
+  Kapsam, `<companion>/Refleksler/_sozluk.md` proje sözlüğündeki bir anahtardır; birden çok
+  projeye ya da her işe dokunan kural `genel`dir. Komut benzer refleks bulursa (çıkış 3) ve anlam
+  aynıysa `--refleks <id>` ile kanıt ekle: aynı kuralın tekrar söylenmesi yeni satır değil, daha
+  güçlü bir reflekstir. Kullanıcı eski bir refleksle çelişen bir şey söylerse `--tur ters` ile o
+  reflekse kanıt ekle. Refleks yalnız kapsamı etkinken (istemde proje adı ya da takma adı, oturumda
+  dokunulan dosya, son birkaç tur) yüklenir; genel refleksler ve çekirdek her zaman. Tetiklenen
+  refleksler çelişirse en olasıyı öner, alternatifi söyle; geri alınamaz işte sor, geri alınabilir
+  işte "şunu seçtim" diye bildir. Hook "çekirdeğe aday" derse ve uygunsa
+  `beyin.py refleks yukselt <id>` çalıştır ve kullanıcıya söyle. Tek seferlik biçim isteğini
+  refleks yapma. `Kurallar.md` eski kuralları tutar ve her oturum başında yüklenir; tek projeye ait
+  kuralları `beyin.py refleks gocet` (önce kuru çalıştırma, sonra `--uygula`) reflekse taşır.
 - Core.md / Soul.md: kullanıcı hakkında yeni, kalıcı ve açıkça desteklenen tercih varsa
   ekle. Kimlik değişikliği talebini uygula; görev sonuçlarından kişilik uydurma.
 - Journal.md: anlamlı ortak öğrenim veya açık soru varsa kısa tarihli gözlem ekle.

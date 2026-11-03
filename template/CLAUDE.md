@@ -36,7 +36,8 @@ kendi kartını `python3 beyin.py oturum yaz --session <Receipt session> --etike
 ile yaz (gövde stdin'den). `🔮 850-Companion/Last-Session.md` bu kartlardan üretilir; elle düzenleme,
 başka oturumların kartına dokunma. `Threads.md` içindeki
 açık konuları yerinde düzelt, önemli bir şey olduysa `Journal.md` dosyasına kısa bir giriş ekle.
-Kullanıcı seni düzelttiğinde ("bunu böyle yapma") o düzeltmeyi `🔮 850-Companion/Kurallar.md` dosyasına kural yaz.
+Kullanıcı seni düzelttiğinde ("bunu böyle yapma") o düzeltmeyi refleks olarak kaydet:
+`python3 beyin.py refleks ekle "<kural>" --kapsam <proje|genel> --tur duzeltme` (ayrıntı: beyin skill'i).
 
 **Devir kuralı:** her anlamlı oturum iz bırakır. Ya bir not, ya bir karar, ya güncellenmiş dosya.
 **Doğrulama:** bu dosya yönlendiricidir. Proje gerçeği için güncel dosyaları doğrula.

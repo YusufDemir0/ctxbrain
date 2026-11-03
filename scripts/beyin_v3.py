@@ -257,6 +257,25 @@ def parser():
     todo_done = todo_sub.add_parser("uygulandi", help="Move finished work to the done section")
     todo_done.add_argument("id")
     todo_done.add_argument("--sonuc", required=True)
+    refleks = sub.add_parser("refleks", help="Scoped, evidence-weighted reflexes that load only in their context")
+    refleks_sub = refleks.add_subparsers(dest="refleks_command", required=True)
+    refleks_add = refleks_sub.add_parser("ekle", help="Add evidence to a reflex or open a new one")
+    refleks_add.add_argument("metin")
+    refleks_add.add_argument("--kapsam", action="append", default=[], help="Project key from the dictionary; omit or 'genel' for global (repeatable)")
+    refleks_add.add_argument("--tur", default="duzeltme", help="kural, duzeltme, karar, tekrar, gozlem or ters")
+    refleks_add.add_argument("--refleks", help="Existing reflex id: add this as evidence instead of opening a new reflex")
+    refleks_add.add_argument("--tetik", action="append", default=[], help="Extra trigger word (repeatable)")
+    refleks_add.add_argument("--tarih", help="Evidence date YYYY-MM-DD; default today")
+    refleks_add.add_argument("--yeni", action="store_true", help="Open a new reflex even if a similar one exists")
+    refleks_sub.add_parser("liste", help="Reflexes with computed state, weight and core candidacy")
+    refleks_up = refleks_sub.add_parser("yukselt", help="Promote a reflex to core (never fades)")
+    refleks_up.add_argument("id")
+    refleks_down = refleks_sub.add_parser("dusur", help="Return a core reflex to active")
+    refleks_down.add_argument("id")
+    refleks_move = refleks_sub.add_parser("gocet", help="Move single-project rules out of Kurallar.md into reflexes (dry run by default)")
+    refleks_move.add_argument("--uygula", action="store_true", help="Back up Kurallar.md to the archive, then move")
+    refleks_dict = refleks_sub.add_parser("sozluk", help="Show the project dictionary, or create it from project folders")
+    refleks_dict.add_argument("--olustur", action="store_true", help="Write _sozluk.md when it does not exist")
     recap =sub.add_parser("recap", help="Read recent source-linked outcomes without a model call")
     recap.add_argument("--days", type=int, default=7, help="Calendar days in UTC, including today (1..366)")
     recap.add_argument("--limit", type=int, default=20, help="Maximum recent receipts to return (1..100)")
@@ -644,6 +663,40 @@ def main(argv=None):
                 print(f"Last-Session.md yeniden üretildi: {result['shown']}/{result['cards']} kart")
             else:
                 print("\n".join(oturum.liste(vault)) or "Henüz oturum kartı yok.")
+            return 0
+        elif args.command == "refleks":
+            load_sync()
+            import beyin_v3_refleks as refleks
+            command = args.refleks_command
+            if command == "ekle":
+                result = refleks.ekle(vault, args.metin, args.kapsam, args.tur, refleks_id=args.refleks,
+                                      tetik=args.tetik, tarih=args.tarih, yeni=args.yeni)
+                if result["status"] == "benzer_var":
+                    print("Benzer refleks var; aynı anlamdaysa kanıt olarak ekle (--refleks <id>), farklıysa --yeni ile aç:")
+                    for item in result["similar"]:
+                        print(f"- {item['id']} ({item['benzerlik']}): {item['metin']}")
+                    return 3
+                print(f"{result['id']}: {'kanıt eklendi' if result['status'] == 'kanit_eklendi' else 'yeni refleks'}")
+            elif command == "liste":
+                rows = refleks.report(vault, state)
+                for row in rows:
+                    flag = " · çekirdeğe aday" if row["aday"] else ""
+                    print(f"{row['id']} · {row['durum']} · {', '.join(row['kapsam'])} · ağırlık {row['agirlik']:.2f}"
+                          f" · {row['kanit']} kanıt{flag}\n  {row['metin']}")
+                if not rows:
+                    print("Henüz refleks yok.")
+            elif command in ("yukselt", "dusur"):
+                print(f"{args.id}: {refleks.set_core(vault, args.id, core=command == 'yukselt')}")
+            elif command == "gocet":
+                print(json.dumps(refleks.migrate(vault, apply=args.uygula), ensure_ascii=False, indent=2))
+            else:
+                entries = refleks.dictionary(vault)
+                path = refleks.folder(vault) / refleks.DICTIONARY
+                if args.olustur and not path.exists():
+                    refleks.write_dictionary(vault, {k: [a for a in v if a not in (k, k.replace('-', ' '))] for k, v in entries.items()})
+                    print(f"{path.relative_to(vault)} oluşturuldu")
+                for key, aliases in sorted(entries.items()):
+                    print(f"- {key}: {', '.join(aliases)}")
             return 0
         elif args.command == "yapilacak":
             load_sync()

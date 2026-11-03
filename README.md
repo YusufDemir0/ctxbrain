@@ -109,7 +109,7 @@ durumda birleştirmeyi iki tarafın satırlarını da tutarak çözer:
 ## Geliştirme
 
 ```bash
-python3 -m unittest discover -s tests -p "v3_*test.py"
+python3 -m unittest discover -s tests -p "v[35]_*test.py"
 python3 scripts/evaluate_v3_search.py                                                  # arama ölçümü
 python3 scripts/evaluate_v3_search.py --fixture tests/fixtures/v3/search_vocabulary.json  # kelime uyuşmazlığı
 python3 scripts/build_v3_release.py --version "$(cat VERSION)" --output "release/beyin-v3-$(cat VERSION).zip"

@@ -434,6 +434,17 @@ def _main():
                 notice += hook_notice(vault, event, prompt_text(payload) if event == 'UserPromptSubmit' else '')
             except Exception:
                 pass  # a to-do hint can never cost the turn
+        if (not args.metadata_only and event in ('SessionStart', 'UserPromptSubmit', 'PostToolUse')
+                and not (event == 'UserPromptSubmit' and is_synthetic_prompt(payload))):
+            try:
+                from beyin_v3_refleks import trigger
+                tool_input = payload.get('tool_input') if isinstance(payload.get('tool_input'), dict) else {}
+                paths = [tool_input[k] for k in ('file_path', 'notebook_path', 'path') if isinstance(tool_input.get(k), str)]
+                notice += trigger(vault, state, payload.get('session_id'), event,
+                                  prompt_text(payload) if event == 'UserPromptSubmit' else '',
+                                  paths, source=payload.get('source'))
+            except Exception:
+                pass  # a reflex can never cost the turn
         settings = read(vault)
         if not args.metadata_only and event in ('SessionStart', 'PostToolUse') and (state / 'hygiene.json').is_file():
             # Opt-in hygiene signals (#130), machine-local in state/hygiene.json. Independent of the

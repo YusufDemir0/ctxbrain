@@ -44,6 +44,6 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Offline source, runtime, lifecycle and skill contracts
-        run: python -m unittest discover -s tests -p "v3_*test.py"
+        run: python -m unittest discover -s tests -p "v[35]_*test.py"
       - name: Frozen development and holdout retrieval gates
         run: python scripts/evaluate_v3.py

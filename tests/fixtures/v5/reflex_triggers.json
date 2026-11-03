@@ -1,0 +1,27 @@
+{
+  "about": "Synthetic prompts labelled with the project scopes they should activate. An empty list is a meta or unrelated question that must load no project reflex.",
+  "min_precision": 0.9,
+  "dictionary": {
+    "magaza-erp": ["erp", "mağaza", "sevkiyat", "depo", "stok", "kapora"],
+    "video-kanali": ["video", "kapak", "shorts", "dış ses", "klip"],
+    "tez": ["tez", "eeg", "artefakt", "veri seti"]
+  },
+  "cases": [
+    {"prompt": "sevkiyat ekranında depocu onayını düzeltelim", "scopes": ["magaza-erp"]},
+    {"prompt": "ERP'de kapora kuralı nasıldı", "scopes": ["magaza-erp"]},
+    {"prompt": "mağazanın stoğu eksiye düşebilir mi", "scopes": ["magaza-erp"]},
+    {"prompt": "yeni kapakları dene, shorts için de", "scopes": ["video-kanali"]},
+    {"prompt": "dış sesi biraz kısalt", "scopes": ["video-kanali"]},
+    {"prompt": "klipleri sırala", "scopes": ["video-kanali"]},
+    {"prompt": "tezin artefakt bölümünü okudum", "scopes": ["tez"]},
+    {"prompt": "EEG veri setlerinde ham veri var mı", "scopes": ["tez"]},
+    {"prompt": "erp tanıtım videosu çekelim", "scopes": ["magaza-erp", "video-kanali"]},
+    {"prompt": "commit geçmişinde e-posta adresim görünüyor mu", "scopes": []},
+    {"prompt": "tamam devam et", "scopes": []},
+    {"prompt": "superpower bir fikir", "scopes": []},
+    {"prompt": "bugün ne yaptık", "scopes": []},
+    {"prompt": "1", "scopes": []},
+    {"prompt": "depoya bakalım mı yoksa önce mail mi", "scopes": ["magaza-erp"]},
+    {"prompt": "kapsamı daraltma, niyeti sor", "scopes": []}
+  ]
+}

@@ -433,9 +433,14 @@ protokolünü uygula: oturumun kendi kartını
 `python3 beyin.py oturum yaz --session <Receipt session> --etiket <etiket> --proje <proje>`
 ile yaz (gövde stdin'den; aynı oturum+etiket tekrar yazılırsa kendi kartı güncellenir).
 Last-Session.md bu kartlardan üretilen özettir, elle düzenleme; başka oturumların kartına
-dokunma. Açık konuyu Threads'te yerinde güncelle, açık kullanıcı düzeltmesini
-kapsamıyla bir iki satırlık kural olarak Kurallar'a, kalıcı öğrenimi kaynak bağlantılı
-knowledge notuna kaydet.
+dokunma. Açık konuyu Threads'te yerinde güncelle, kalıcı öğrenimi kaynak bağlantılı
+knowledge notuna kaydet. Açık kullanıcı düzeltmesini refleks olarak kaydet:
+`python3 beyin.py refleks ekle "<bir iki satırlık kural>" --kapsam <proje|genel> --tur duzeltme`.
+Komut benzer refleks gösterirse ve anlam aynıysa `--refleks <id>` ile kanıt ekle, farklıysa
+`--yeni` kullan. Refleksler yalnız kapsamları etkinken yüklenir; tetiklenen refleksler
+kullanıcının kanıtla ağırlıklanmış davranışlarıdır, çelişirlerse en olasıyı öner ve
+alternatifi söyle. Hook "çekirdeğe aday" derse uygunsa `beyin.py refleks yukselt <id>`
+çalıştır ve kullanıcıya bildir.
 Kullanıcının doğrudan söylediği tercih, karar ve olgu çıkarım değildir; istenmesini
 beklemeden kaydedilir. Core ve Journal'ı yalnız yeni ve dayanaklı bir şey olduğunda
 güncelle. Bunlar kullanıcı notlarıdır; güncellemelerde korunur. Ardından kaynak
