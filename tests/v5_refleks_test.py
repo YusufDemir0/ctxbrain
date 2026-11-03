@@ -310,3 +310,16 @@ class SyncSafetyTest(unittest.TestCase):
         self.assertNotIn('karar.md', self.indexed())
         note.write_text('Önce\nA seçildi\n', encoding='utf-8')
         self.assertIn('karar.md', self.indexed())
+
+
+class CarryOverTest(VaultBase):
+    def test_reflexes_continue_only_when_the_project_is_named_again(self):
+        for n in range(40):
+            refleks.ekle(self.vault, f'Mağaza kuralı {n} ' + 'ayrıntı ' * 12, ['magaza-erp'], 'kural', yeni=True)
+        self.fire('SessionStart')
+        first = self.fire('UserPromptSubmit', 'sevkiyat ekranı')
+        self.assertIn('sonraki turlarda', first)
+        self.assertEqual(self.fire('UserPromptSubmit', 'git geçmişinde e-posta görünür mü'), '')
+        self.assertIn('Mağaza kuralı', self.fire('UserPromptSubmit', 'sevkiyatta başka ne vardı'))
+        record = refleks._read_json(refleks._session_path(self.state, 's1'), {})
+        self.assertIn('magaza-erp', record['projects'])  # still open for the retrieval gate

@@ -340,14 +340,17 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
     if not reflexes and not projects and not (folder(vault) / DICTIONARY).is_file():
         return ''
     entries = dictionary(vault)
+    fresh = set()  # scopes named or touched in this very event
     if event == 'UserPromptSubmit':
         projects = {k: v - 1 for k, v in projects.items() if v - 1 > 0}
         for key in scopes_in(prompt, entries):
             projects[key] = SESSION_TURNS
+            fresh.add(key)
     touched = list(record.get('touched', []))
     for path in paths:
         for key in scopes_in_path(vault, path, entries):
             projects[key] = SESSION_TURNS
+            fresh.add(key)
         try:
             shown_path = Path(path).resolve().relative_to(Path(vault).resolve()).as_posix()
         except (OSError, ValueError):
@@ -359,7 +362,9 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
     fired, faded, opening_core = [], set(), []
     for reflex in reflexes:
         scoped = set(reflex['kapsam'])
-        in_scope = bool(scoped & set(projects))
+        # A scope carried over from earlier turns keeps the retrieval gate open, but its reflexes
+        # are said only when the project is named or touched again: no drip into unrelated turns.
+        in_scope = bool(scoped & fresh)
         if state_of(reflex, today, used.get(reflex['id'])) == 'sonmus':
             # Forgotten, not lost: returning to its project brings it back, marked as old.
             if not in_scope:
