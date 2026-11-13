@@ -88,6 +88,20 @@ def prompt_text(payload):
     return ""
 
 
+def no_memory_session(state, session_id):
+    """Sessions registered as memory-free (e.g. delegated worker conversations).
+
+    A delegating tool writes one ``<session id>\t<iso time>`` line per worker to
+    ``<state>/no-memory-sessions.txt`` before the first prompt is sent; the hook then
+    neither injects vault context nor records the session.
+    """
+    try:
+        lines = (state / 'no-memory-sessions.txt').read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return False
+    return str(session_id) in {line.split('\t', 1)[0].strip() for line in lines}
+
+
 def receipt_context(vault, state):
     """The newest receipt by its created_at stamp (#112), read from the runtime index."""
     import sqlite3
@@ -427,7 +441,8 @@ def _main():
                 return
             payload["session_id"] = payload.get("conversationId", "unknown")
         payload["hook_event_name"] = event
-        if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or os.environ.get("BEYIN_V3_SKIP") == "1" or payload.get('no_memory') is True:
+        if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or os.environ.get("BEYIN_V3_SKIP") == "1" or payload.get('no_memory') is True \
+                or no_memory_session(state, payload.get('session_id')):
             print("{}")
             return
         if event == 'UserPromptSubmit' and not args.metadata_only and not is_synthetic_prompt(payload):

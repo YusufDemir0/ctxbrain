@@ -117,6 +117,14 @@ class CompanionTest(unittest.TestCase):
         self.assertEqual(self.hook(no_memory=True), '')
         self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
 
+    def test_registered_worker_session_gets_no_memory(self):
+        # A delegating tool (e.g. a worker pool) registers its conversation before the first prompt.
+        self.seed()
+        (self.state / 'no-memory-sessions.txt').write_text('worker-1\t2026-11-13T00:00:00Z\n')
+        self.assertEqual(self.hook('PreInvocation', 'antigravity', conversationId='worker-1', invocationNum=0), '')
+        self.assertEqual(list((self.state / 'hook-queue').glob('*.json')), [])
+        self.assertIn('IDENTITY_CANARY', self.hook('PreInvocation', 'antigravity', conversationId='user-1', invocationNum=0))
+
     def test_existing_custom_identity_is_preserved_without_duplicate_companion(self):
         target = self.vault / 'My Partner'; target.mkdir()
         (target / 'Soul.md').write_text('CUSTOM_IDENTITY_CANARY')
