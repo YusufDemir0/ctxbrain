@@ -124,6 +124,19 @@ def rewrite_note(entry):
     return '; dosyayi sinir icinde yeniden yaz.'
 
 
+def _format_coverage_bucket(bucket, noun):
+    """Format a receipt coverage window summary with optional 7-day percentage."""
+    if not isinstance(bucket, dict) or bucket.get('total', 0) <= 0:
+        return '- (0 ' + noun + ')'
+    ratio = bucket.get('ratio')
+    pct = int(round(ratio * 100)) if ratio is not None else 0
+    d7 = bucket.get('last_7d', {})
+    d7_text = ''
+    if isinstance(d7, dict) and d7.get('total', 0) > 0 and d7.get('ratio') is not None:
+        d7_text = ', son 7 gun: %' + str(int(round(d7['ratio'] * 100)))
+    return '%' + str(pct) + ' (' + str(bucket['covered']) + '/' + str(bucket['total']) + ' ' + noun + d7_text + ')'
+
+
 def human_result(result, command, installed_version=None):
     status = result.get('status', '')
     if result.get('error'):
@@ -247,14 +260,11 @@ def human_result(result, command, installed_version=None):
         if result.get('secrets_redacted'):
             lines.append('Sir suzgeci ' + str(result['secrets_redacted']) + ' eslesmeyi [REDACTED] olarak yazdi.')
         cov = result.get('receipt_coverage')
-        if isinstance(cov, dict) and cov.get('total', 0) > 0:
-            ratio = cov.get('ratio')
-            pct = int(round(ratio * 100)) if ratio is not None else 0
-            d7 = cov.get('last_7d', {})
-            d7_text = ''
-            if d7.get('total', 0) > 0 and d7.get('ratio') is not None:
-                d7_text = ', son 7 gun: %' + str(int(round(d7['ratio'] * 100)))
-            lines.append('Makbuz kapsami: %' + str(pct) + ' (' + str(cov['covered']) + '/' + str(cov['total']) + ' oturum' + d7_text + ')')
+        if isinstance(cov, dict):
+            edit_cov = cov.get('last_edit') if isinstance(cov.get('last_edit'), dict) else {}
+            if cov.get('total', 0) > 0 or edit_cov.get('total', 0) > 0:
+                lines.append('Makbuz kapsami: ' + _format_coverage_bucket(cov, 'oturum') +
+                             ' | son duzenleme: ' + _format_coverage_bucket(edit_cov, 'duzenleyen'))
         kf = result.get('knowledge_freshness')
         if isinstance(kf, dict) and kf.get('status') == 'unavailable':
             lines.append('Son bilgi damitmasi: olculemedi (' + str(kf.get('error') or 'hata') + ')')

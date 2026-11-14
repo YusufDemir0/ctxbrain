@@ -140,15 +140,61 @@ def recent_receipts(db, days=7, limit=20, today=None, vault=None):
     return result
 
 
+_UUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+
+
+def _session_digest(session):
+    """Return sha256(uuid)[:24] when session is a raw 36-char UUID, matching enqueue_event."""
+    if isinstance(session, str) and _UUID_RE.match(session):
+        return hashlib.sha256(session.encode()).hexdigest()[:24]
+    return None
+
+
+def _backfill_edit_at_from_hook_done(db):
+    """Populate edit_at from archived PostToolUse hook-done payloads on existing vaults."""
+    try:
+        rows = db.execute('PRAGMA database_list').fetchall()
+    except sqlite3.Error:
+        return
+    db_file = next((r[2] for r in rows if r[1] == 'main' and r[2]), None)
+    if not db_file:
+        return
+    done_dir = Path(db_file).parent / 'hook-done'
+    if not done_dir.is_dir():
+        return
+    edits = {}
+    for path in done_dir.glob('*.json'):
+        try:
+            event = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, TypeError):
+            continue
+        if (not isinstance(event, dict) or event.get('event') != 'PostToolUse' or
+                not event.get('harness') or not event.get('session') or event.get('no_memory')):
+            continue
+        at = event.get('at')
+        if isinstance(at, (int, float)) and not isinstance(at, bool):
+            key = (event['harness'], event['session'])
+            edits[key] = max(float(at), edits.get(key, float(at)))
+    for (harness, session), edit_at in edits.items():
+        db.execute('UPDATE receipt_checkpoints SET edit_at=MAX(edit_at, ?) WHERE harness=? AND session=?',
+                   (edit_at, harness, session))
+
+
 def _checkpoint_schema(db):
-    db.execute('CREATE TABLE IF NOT EXISTS receipt_checkpoints(harness TEXT, session TEXT, at REAL, turn_at REAL DEFAULT 0, PRIMARY KEY(harness,session))')
-    if 'turn_at' not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
+    db.execute('CREATE TABLE IF NOT EXISTS receipt_checkpoints(harness TEXT, session TEXT, at REAL, turn_at REAL DEFAULT 0, prompt_at REAL DEFAULT 0, edit_at REAL DEFAULT 0, PRIMARY KEY(harness,session))')
+    cols = {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}
+    if 'turn_at' not in cols:
         db.execute('ALTER TABLE receipt_checkpoints ADD COLUMN turn_at REAL DEFAULT 0')
-    if 'prompt_at' not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
+    if 'prompt_at' not in cols:
         db.execute('ALTER TABLE receipt_checkpoints ADD COLUMN prompt_at REAL DEFAULT 0')
+    added_edit_at = 'edit_at' not in cols
+    if added_edit_at:
+        db.execute('ALTER TABLE receipt_checkpoints ADD COLUMN edit_at REAL DEFAULT 0')
     for column in ('project', 'project_id'):
-        if column not in {row[1] for row in db.execute('PRAGMA table_info(receipt_checkpoints)')}:
+        if column not in cols:
             db.execute(f'ALTER TABLE receipt_checkpoints ADD COLUMN {column} TEXT')
+    if added_edit_at:
+        _backfill_edit_at_from_hook_done(db)
 
 
 def record_checkpoints(engine, events):
@@ -163,6 +209,8 @@ def record_checkpoints(engine, events):
                            (event['harness'], event['session'], event['at'], event['at']))
             elif event.get('event') == 'SessionStart':
                 db.execute('INSERT INTO receipt_checkpoints(harness,session,at,turn_at) VALUES (?,?,0,?) ON CONFLICT(harness,session) DO UPDATE SET turn_at=MAX(turn_at,excluded.turn_at)', values)
+            elif event.get('event') == 'PostToolUse':
+                db.execute('INSERT INTO receipt_checkpoints(harness,session,at,edit_at) VALUES (?,?,0,?) ON CONFLICT(harness,session) DO UPDATE SET edit_at=MAX(edit_at,excluded.edit_at)', values)
             elif event.get('event') in ('Stop', 'SessionEnd'):
                 db.execute('INSERT INTO receipt_checkpoints(harness,session,at) VALUES (?,?,?) ON CONFLICT(harness,session) DO UPDATE SET at=MAX(at,excluded.at)', values)
             if event.get('project') and event.get('project_id'):
@@ -171,66 +219,97 @@ def record_checkpoints(engine, events):
 
 
 def _latest_receipts(db):
-    """Latest receipt time per (harness, session); a missing or unreadable created_at never covers a checkpoint."""
+    """Latest receipt time per (harness, session); a missing or unreadable created_at never covers a checkpoint.
+
+    Also indexes sha256(uuid)[:24] when a receipt stores a raw 36-char UUID session (e.g. Antigravity).
+    """
     latest = {}
     for (payload,) in db.execute('SELECT payload FROM receipts'):
         try:
             receipt = json.loads(payload)
-            created = datetime.fromisoformat(receipt['created_at']).timestamp()
-        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            raw_at = receipt['created_at']
+            if not isinstance(raw_at, str):
+                raise TypeError('created_at must be a string')
+            created = datetime.fromisoformat(raw_at.replace('Z', '+00:00')).timestamp()
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError, OSError):
             continue
-        key = (receipt.get('harness'), receipt.get('session'))
+        harness = receipt.get('harness')
+        session = receipt.get('session')
+        key = (harness, session)
         latest[key] = max(created, latest.get(key, created))
+        digest = _session_digest(session)
+        if digest and digest != session:
+            dkey = (harness, digest)
+            latest[dkey] = max(created, latest.get(dkey, created))
     return latest
 
 
+def _new_windows():
+    return {
+        'all_time': {'total': 0, 'covered': 0, 'missing': 0},
+        'last_7d': {'total': 0, 'covered': 0, 'missing': 0},
+        'last_30d': {'total': 0, 'covered': 0, 'missing': 0},
+    }
+
+
+def _record_windows(windows, chk_at, seven_days, thirty_days, matched):
+    for w_name, w_active in (('all_time', True), ('last_30d', chk_at >= thirty_days), ('last_7d', chk_at >= seven_days)):
+        if w_active:
+            windows[w_name]['total'] += 1
+            if matched:
+                windows[w_name]['covered'] += 1
+            else:
+                windows[w_name]['missing'] += 1
+
+
+def _finalize_windows(windows):
+    def _pack(bucket):
+        total = bucket['total']
+        return {
+            'ratio': round(bucket['covered'] / total, 3) if total else None,
+            'covered': bucket['covered'],
+            'total': total,
+            'missing': bucket['missing'],
+        }
+
+    out = _pack(windows['all_time'])
+    out['last_7d'] = _pack(windows['last_7d'])
+    out['last_30d'] = _pack(windows['last_30d'])
+    return out
+
+
 def receipt_coverage(db, now=None):
+    """Compute session-level and post-last-edit receipt coverage metrics."""
     if now is None:
         now = time.time()
     seven_days = now - 7 * 86400
     thirty_days = now - 30 * 86400
     _checkpoint_schema(db)
     latest = _latest_receipts(db)
-    windows = {
-        'all_time': {'total': 0, 'covered': 0, 'missing': 0},
-        'last_7d': {'total': 0, 'covered': 0, 'missing': 0},
-        'last_30d': {'total': 0, 'covered': 0, 'missing': 0},
-    }
-    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,prompt_at FROM receipt_checkpoints'):
-        if not row[2] or row[2] < row[3]:
+    sess_windows = _new_windows()
+    edit_windows = _new_windows()
+    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,prompt_at,edit_at FROM receipt_checkpoints'):
+        chk_at, turn_at, prompt_at, edit_at = row[2], row[3] or 0, row[6] or 0, row[7] or 0
+        if not chk_at or chk_at < turn_at:
             continue
         # Only count sessions that saw a user prompt: UserPromptSubmit, or a SessionStart carrying the first prompt (#78)
-        if not row[6]:
+        if not prompt_at:
             continue
-        chk_at = row[2]
-        threshold = row[3] or row[2]
-        matched = latest.get((row[0], row[1]), float('-inf')) >= threshold
-        for w_name, w_active in (('all_time', True), ('last_30d', chk_at >= thirty_days), ('last_7d', chk_at >= seven_days)):
-            if w_active:
-                windows[w_name]['total'] += 1
-                if matched:
-                    windows[w_name]['covered'] += 1
-                else:
-                    windows[w_name]['missing'] += 1
+        latest_at = latest.get((row[0], row[1]))
+        _record_windows(sess_windows, chk_at, seven_days, thirty_days, latest_at is not None)
+        # Exclude pure Q&A sessions (no recorded PostToolUse file edits) from last-edit coverage denominator.
+        if edit_at > 0:
+            _record_windows(edit_windows, chk_at, seven_days, thirty_days, latest_at is not None and latest_at >= edit_at)
 
-    return {
-        'ratio': round(windows['all_time']['covered'] / windows['all_time']['total'], 3) if windows['all_time']['total'] else None,
-        'covered': windows['all_time']['covered'],
-        'total': windows['all_time']['total'],
-        'missing': windows['all_time']['missing'],
-        'last_7d': {
-            'ratio': round(windows['last_7d']['covered'] / windows['last_7d']['total'], 3) if windows['last_7d']['total'] else None,
-            'covered': windows['last_7d']['covered'],
-            'total': windows['last_7d']['total'],
-            'missing': windows['last_7d']['missing'],
-        },
-        'last_30d': {
-            'ratio': round(windows['last_30d']['covered'] / windows['last_30d']['total'], 3) if windows['last_30d']['total'] else None,
-            'covered': windows['last_30d']['covered'],
-            'total': windows['last_30d']['total'],
-            'missing': windows['last_30d']['missing'],
-        }
-    }
+    session_cov = _finalize_windows(sess_windows)
+    result = dict(session_cov)
+    result['session'] = _finalize_windows(sess_windows)
+    result['last_edit'] = _finalize_windows(edit_windows)
+    result['meaning'] = (
+        'Top-level and "session" report prompted closed sessions with at least one receipt; '
+        '"last_edit" reports prompted closed sessions with file edits (PostToolUse) whose latest receipt is >= edit_at (editless Q&A excluded).'
+    )
+    return result
 
 
 def refresh_gaps(engine, db):
@@ -238,22 +317,32 @@ def refresh_gaps(engine, db):
     _checkpoint_schema(db)
     latest = _latest_receipts(db)
     gaps = []
-    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id FROM receipt_checkpoints'):
-        if not row[2] or row[2] < row[3]:
+    for row in db.execute('SELECT harness,session,at,turn_at,project,project_id,prompt_at,edit_at FROM receipt_checkpoints'):
+        chk_at, turn_at, prompt_at, edit_at = row[2], row[3] or 0, row[6] or 0, row[7] or 0
+        if not chk_at or chk_at < turn_at or not prompt_at:
             continue
-        threshold = row[3] or row[2]
-        matched = latest.get((row[0], row[1]), float('-inf')) >= threshold
+        latest_at = latest.get((row[0], row[1]))
+        matched = (latest_at is not None and latest_at >= edit_at) if edit_at > 0 else (latest_at is not None)
         if not matched:
-            gaps.append({'harness': row[0], 'session': row[1], 'checkpoint_at': row[2], 'turn_at': row[3], 'scope': 'session_only' if row[0] == 'antigravity' else 'turn' if row[3] else 'terminal_only'})
+            gap = {
+                'harness': row[0],
+                'session': row[1],
+                'checkpoint_at': chk_at,
+                'turn_at': row[3],
+                'scope': 'session_only' if row[0] == 'antigravity' else 'after_last_edit' if edit_at > 0 else 'turn' if row[3] else 'terminal_only',
+            }
+            if edit_at > 0:
+                gap['edit_at'] = edit_at
             if row[4] and row[5]:
-                gaps[-1].update(project=row[4], project_id=row[5])
+                gap.update(project=row[4], project_id=row[5])
+            gaps.append(gap)
     coverage = receipt_coverage(db, now=time.time())
     atomic(engine.state/'receipt-gaps.json', json.dumps({
         'potential_missing_receipts': len(gaps),
         'receipt_coverage': coverage,
         'checkpoints': gaps,
         'scope_limits': {'antigravity': 'session_only; later per-turn boundaries unsupported', 'missing_prompt_event': 'terminal_only; receipt attribution may be incomplete'},
-        'meaning': 'Checkpoint without a matching structured receipt; may be trivial or deliberately omitted. No summary inferred.'
+        'meaning': 'Prompted checkpoint without a matching receipt (after last edit when edits recorded, else any receipt in session); may be trivial or deliberately omitted. No summary inferred.'
     }))
 
 

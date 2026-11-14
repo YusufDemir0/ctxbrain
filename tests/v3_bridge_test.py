@@ -159,8 +159,11 @@ class BridgeTest(unittest.TestCase):
             db.execute('CREATE TABLE receipt_checkpoints(harness TEXT,session TEXT,at REAL,PRIMARY KEY(harness,session))')
             db.execute("INSERT INTO receipt_checkpoints VALUES ('codex','old',123)")
         hook.drain_queue(self.vault, self.state)
+        with engine.store._connect() as db:
+            row = db.execute("SELECT harness,session,at,prompt_at,edit_at FROM receipt_checkpoints WHERE session='old'").fetchone()
+        self.assertEqual(row, ('codex', 'old', 123.0, 0.0, 0.0))
         gaps = json.loads((self.state / 'receipt-gaps.json').read_text(encoding='utf-8'))['checkpoints']
-        self.assertEqual(gaps[0]['session'], 'old')
+        self.assertEqual([g for g in gaps if g['session'] == 'old'], [])
 
     def test_installed_zip_config_executes_from_external_project_without_global_writes(self):
         package = self.root / 'candidate.zip'

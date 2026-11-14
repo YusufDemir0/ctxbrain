@@ -145,7 +145,11 @@ class MigrationTest(unittest.TestCase):
         from beyin_v3_projections import record_checkpoints
         self.source('notes/example.md', 'Synthetic source')
         engine = SyncEngine(self.root, self.state)
-        record_checkpoints(engine, [{'event': 'Stop', 'harness': 'codex', 'session': 'synthetic', 'at': 1}])
+        record_checkpoints(engine, [
+            {'event': 'UserPromptSubmit', 'harness': 'codex', 'session': 'synthetic', 'at': 0.5},
+            {'event': 'PostToolUse', 'harness': 'codex', 'session': 'synthetic', 'at': 0.8},
+            {'event': 'Stop', 'harness': 'codex', 'session': 'synthetic', 'at': 1},
+        ])
         engine.sync()
         gaps = json.loads((self.state/'receipt-gaps.json').read_text())
         self.assertEqual(gaps['potential_missing_receipts'], 1)
@@ -154,15 +158,29 @@ class MigrationTest(unittest.TestCase):
         engine.sync()
         self.assertEqual(json.loads((self.state/'receipt-gaps.json').read_text())['potential_missing_receipts'], 0)
 
-    def test_prior_turn_receipt_does_not_cover_next_turn(self):
+    def test_prior_turn_receipt_covers_qa_next_turn_but_not_later_edit(self):
         from beyin_v3_sync import SyncEngine
         from beyin_v3_projections import record_checkpoints
         import time
         self.source('notes/example.md', 'Synthetic source')
         engine = SyncEngine(self.root, self.state)
-        record_checkpoints(engine, [{'event': 'UserPromptSubmit', 'harness': 'codex', 'session': 'same', 'at': time.time()-10}])
+        base = time.time()
+        record_checkpoints(engine, [
+            {'event': 'UserPromptSubmit', 'harness': 'codex', 'session': 'same', 'at': base - 10},
+            {'event': 'PostToolUse', 'harness': 'codex', 'session': 'same', 'at': base - 5},
+        ])
         engine.receipt('turn-one', 'First outcome.', ['notes/example.md'], 'codex', session='same')
-        record_checkpoints(engine, [{'event': 'UserPromptSubmit', 'harness': 'codex', 'session': 'same', 'at': time.time()+1}, {'event': 'Stop', 'harness': 'codex', 'session': 'same', 'at': time.time()+2}])
+        record_checkpoints(engine, [
+            {'event': 'UserPromptSubmit', 'harness': 'codex', 'session': 'same', 'at': base + 1},
+            {'event': 'Stop', 'harness': 'codex', 'session': 'same', 'at': base + 2},
+        ])
+        engine.sync()
+        self.assertEqual(json.loads((self.state/'receipt-gaps.json').read_text())['potential_missing_receipts'], 0)
+        record_checkpoints(engine, [
+            {'event': 'UserPromptSubmit', 'harness': 'codex', 'session': 'same', 'at': base + 50},
+            {'event': 'PostToolUse', 'harness': 'codex', 'session': 'same', 'at': base + 60},
+            {'event': 'Stop', 'harness': 'codex', 'session': 'same', 'at': base + 70},
+        ])
         engine.sync()
         self.assertEqual(json.loads((self.state/'receipt-gaps.json').read_text())['potential_missing_receipts'], 1)
 
