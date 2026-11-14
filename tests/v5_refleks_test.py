@@ -35,6 +35,31 @@ class WeightTest(unittest.TestCase):
         self.assertEqual(refleks.state_of(old, TODAY), 'sonmus')
         self.assertEqual(refleks.state_of(old, TODAY, last_fired=day(10)), 'aktif')
 
+    def test_contrary_evidence_below_zero_fades_immediately_and_firing_does_not_revive(self):
+        zeroed = reflex([(day(5), 'kural'), (day(5), 'ters')])
+        self.assertEqual(refleks.weight(zeroed, TODAY), 0.0)
+        self.assertEqual(refleks.state_of(zeroed, TODAY), 'sonmus')
+        self.assertEqual(refleks.state_of(zeroed, TODAY, last_fired=day(1)), 'sonmus')
+
+        negated = reflex([(day(120), 'kural'), (day(120), 'kural'), (day(10), 'ters')])
+        self.assertLess(refleks.weight(negated, TODAY), 0.0)
+        self.assertEqual(refleks.state_of(negated, TODAY), 'sonmus')
+        # Firing must not refresh old positive items when base weight <= 0 or latest evidence is contrary.
+        self.assertLess(refleks.weight(negated, TODAY, last_fired=day(1)), 0.0)
+        self.assertEqual(refleks.state_of(negated, TODAY, last_fired=day(1)), 'sonmus')
+
+        # Latest evidence contrary still suppresses refresh even while net weight > 0.
+        contradicted = reflex([(day(100), 'kural'), (day(10), 'kural'), (day(5), 'ters')])
+        self.assertAlmostEqual(
+            refleks.weight(contradicted, TODAY, last_fired=day(1)),
+            refleks.weight(contradicted, TODAY),
+        )
+
+        # Adding new positive evidence revives the reflex.
+        revived = reflex([(day(120), 'kural'), (day(10), 'ters'), (day(1), 'duzeltme')])
+        self.assertGreater(refleks.weight(revived, TODAY), 0.0)
+        self.assertEqual(refleks.state_of(revived, TODAY), 'aktif')
+
     def test_core_never_fades(self):
         self.assertEqual(refleks.state_of(reflex([(day(400), 'kural')], durum='cekirdek'), TODAY), 'cekirdek')
 
@@ -114,6 +139,23 @@ class VaultTest(VaultBase):
         turn = self.fire('UserPromptSubmit', 'erp canlı')
         self.assertIn('Canlı veriye dokunma', turn)
         self.assertIn('eski, doğrula', turn)
+
+    def test_cancelled_reflex_is_not_injected_and_new_positive_revives_it(self):
+        rid = refleks.ekle(self.vault, 'Depocu kârı görmez', ['magaza-erp'], 'kural', tarih=day(10))['id']
+        gid = refleks.ekle(self.vault, 'Her cevaba özet ekle', [], 'kural', tarih=day(10))['id']
+        refleks.ekle(self.vault, 'Depocu artık kârı görsün', ['magaza-erp'], 'ters', refleks_id=rid, tarih=day(1))
+        refleks.ekle(self.vault, 'Özet ekleme', [], 'ters', refleks_id=gid, tarih=day(1))
+
+        self.assertNotIn('Her cevaba özet ekle', self.fire('SessionStart'))
+        self.assertEqual(self.fire('UserPromptSubmit', 'erp sevkiyat'), '')
+        # Triggering the scope must not record usage or resurrect the cancelled reflex.
+        self.assertEqual(refleks.usage(self.state), {})
+        self.assertEqual(self.fire('UserPromptSubmit', 'sevkiyat devam', session='s2'), '')
+
+        # New positive evidence revives it.
+        refleks.ekle(self.vault, 'Depocu kârı görmemeli', ['magaza-erp'], 'duzeltme', refleks_id=rid, tarih=day(0))
+        revived = self.fire('UserPromptSubmit', 'erp sevkiyat', session='s3')
+        self.assertIn('Depocu kârı görmez', revived)
 
     def test_similar_reflex_is_offered_instead_of_duplicated(self):
         first = refleks.ekle(self.vault, 'Depo personeli kâr ve maliyet görmez', ['magaza-erp'], 'kural')
@@ -365,10 +407,14 @@ class HookEndToEndTest(unittest.TestCase):
 
             self.hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'e2e-1',
                        'prompt': 'Bundan sonra müşteri listesinde telefonu her zaman maskele, unutma.'})
-            opening = self.hook({'hook_event_name': 'SessionStart', 'session_id': 'e2e-2', 'source': 'startup'})
-            self.assertIn('Refleks önerileri', opening)
-            self.assertIn('telefonu her zaman maskele', opening)
-            again = self.hook({'hook_event_name': 'SessionStart', 'session_id': 'e2e-3', 'source': 'startup'})
+            unrelated = self.hook({'hook_event_name': 'SessionStart', 'session_id': 'e2e-2', 'source': 'startup'})
+            self.assertNotIn('telefonu her zaman maskele', unrelated)  # scoped suggestion stays until matching project
+            matched = self.hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'e2e-2',
+                                 'prompt': 'sevkiyat ekranında ne var?'})
+            self.assertIn('Refleks önerileri', matched)
+            self.assertIn('telefonu her zaman maskele', matched)
+            again = self.hook({'hook_event_name': 'UserPromptSubmit', 'session_id': 'e2e-3',
+                               'prompt': 'sevkiyat devam'})
             self.assertNotIn('telefonu her zaman maskele', again)  # said once
 
 
@@ -389,3 +435,76 @@ class AbsorbTest(VaultBase):
         self.assertEqual(len(lines), 1)
         self.assertIn(f'--refleks {rid} --tur tekrar', lines[0])
         self.assertEqual(refleks.suggestions(self.state, 'baska-oturum'), [])
+
+    def test_out_of_scope_suggestion_is_not_consumed_until_matching_session_and_expires(self):
+        self.fire('SessionStart', session='s1')
+        self.fire('UserPromptSubmit', 'erp', session='s1')
+        refleks.absorb(self.vault, self.state, 's1', [
+            ('kural', 'Bundan sonra sevkiyat fişinde fiyat gösterme'),
+        ], today=TODAY)
+        refleks.absorb(self.vault, self.state, 's0', [
+            ('kural', 'Bundan sonra özetler üç maddede kalsın'),
+        ], today=TODAY)
+
+        # Unrelated SessionStart consumes only the global suggestion, leaving the scoped one intact.
+        opening = self.fire('SessionStart', session='s-unrelated')
+        self.assertIn('üç maddede kalsın', opening)
+        self.assertNotIn('sevkiyat fişinde', opening)
+
+        # Different project session also leaves magaza-erp suggestion untouched.
+        video_turn = self.fire('UserPromptSubmit', 'kapak görseli', session='s-unrelated')
+        self.assertNotIn('sevkiyat fişinde', video_turn)
+        self.assertEqual(len(refleks.suggestions(self.state, 's1', today=TODAY)), 1)
+
+        # Same session does not prematurely consume its own suggestion before closing/next session.
+        self.assertNotIn('sevkiyat fişinde', self.fire('UserPromptSubmit', 'erp devam', session='s1'))
+
+        # Subsequent matching session receives and consumes the scoped suggestion.
+        self.fire('SessionStart', session='s-match')
+        matched = self.fire('UserPromptSubmit', 'sevkiyat ekranı', session='s-match')
+        self.assertIn('Refleks önerileri', matched)
+        self.assertIn('sevkiyat fişinde fiyat gösterme', matched)
+        self.assertEqual(refleks.suggestions(self.state, 's1', today=TODAY), [])
+        self.assertNotIn('sevkiyat fişinde', self.fire('UserPromptSubmit', 'erp', session='s-later'))
+
+        # Very old suggestions (14+ days) expire automatically.
+        refleks.absorb(self.vault, self.state, 's-old', [
+            ('kural', 'Bundan sonra çok eski kural'),
+        ], today=TODAY - timedelta(days=14))
+        refleks.absorb(self.vault, self.state, 's-recent', [
+            ('kural', 'Bundan sonra taze kural'),
+        ], today=TODAY - timedelta(days=13))
+        start = self.fire('SessionStart', session='s-clean')
+        self.assertNotIn('çok eski kural', start)
+        self.assertIn('taze kural', start)
+        self.assertEqual(refleks._read_json(Path(self.state) / refleks.SUGGESTIONS, []), [])
+
+    def test_correction_or_simplification_decisions_become_candidates_ordinary_do_not(self):
+        candidates = (
+            'Redis yerine Valkey olsun',
+            'X yerine Y kullanalım',
+            'Bu kadar detaya gerek yok',
+            'Buna hiç gereği yok artık',
+            'Ekstra soyutlamaya ihtiyacımız yok',
+            'İHTİYACIMIZ KALMADI, eski haliyle devam',
+            'Mevcut yapı olduğu gibi kalsın',
+            'Sadelik daha iyi',
+            'Bence daha sade ve basit olmalı',
+            'Gereksiz adımları sadeleştirelim',
+            'Fazladan onay eklemeyelim',
+        )
+        ordinary = (
+            'bugün öğlen toplantı var',
+            'Veritabanı olarak PostgreSQL kullanalım',
+            'Frontend için React seçtik çünkü ekip biliyor',
+            'Kullanıcı ihtiyacına göre yeni rapor ekranı ekleyelim',
+            'Yeni veri ekleme modülünü yarın yazalım',
+        )
+        res = refleks.absorb(
+            self.vault, self.state, 's1',
+            [('karar', s) for s in candidates + ordinary],
+            today=TODAY,
+        )
+        self.assertEqual(res['oneri'], len(candidates))
+        queued = [q['metin'] for q in refleks._read_json(Path(self.state) / refleks.SUGGESTIONS, [])]
+        self.assertEqual(queued, list(candidates))
