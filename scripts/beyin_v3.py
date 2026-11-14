@@ -247,6 +247,15 @@ def parser():
     oturum_yaz.add_argument("--dosya", help="Markdown body file; default stdin")
     oturum_sub.add_parser("derle", help="Rebuild Last-Session.md from the cards")
     oturum_sub.add_parser("liste", help="List the cards, newest first")
+    devir = sub.add_parser("devir", help="Handoff cards: continue another client's interrupted work")
+    devir_sub = devir.add_subparsers(dest="devir_command", required=True)
+    devir_sub.add_parser("liste", help="Open handoff cards, newest first")
+    devir_goster = devir_sub.add_parser("goster", help="Show a handoff card (--detay adds the last turns)")
+    devir_goster.add_argument("sid", help="First 8 hex characters of the session")
+    devir_goster.add_argument("--detay", action="store_true")
+    devir_goster.add_argument("--tur", type=int, default=12)
+    devir_kapat = devir_sub.add_parser("kapat", help="Close a handoff card (moved to Devir/Arşiv, never deleted)")
+    devir_kapat.add_argument("sid")
     todo = sub.add_parser("yapilacak", help="Yapılacaklar.md: ekle, liste, uygulandi")
     todo_sub = todo.add_subparsers(dest="todo_command", required=True)
     todo_add = todo_sub.add_parser("ekle", help="Record work for later without doing it")
@@ -669,6 +678,20 @@ def main(argv=None):
             else:
                 print("\n".join(oturum.liste(vault)) or "Henüz oturum kartı yok.")
             return 0
+        elif args.command == "devir":
+            load_sync()
+            import beyin_v3_devir as devir_mod
+            if args.devir_command == "liste":
+                print("\n".join(devir_mod.liste(vault)) or "Açık devir kartı yok.")
+            elif args.devir_command == "goster":
+                print(devir_mod.goster(vault, args.sid, detay=args.detay, tur=args.tur))
+            else:
+                n = devir_mod.kapat(vault, args.sid, "devralan kapattı")
+                if n:
+                    import beyin_v3_oturum as oturum
+                    oturum.derle(vault, state)
+                print(f"{n} devir kartı kapatıldı" if n else "Bu kimlikte açık devir kartı yok.")
+            return 0
         elif args.command == "refleks":
             load_sync()
             import beyin_v3_refleks as refleks
@@ -801,6 +824,14 @@ def main(argv=None):
                 payload = read_json(args.file)
             result = sync.receipt(payload["event_id"], payload["summary"],
                                           payload["refs"], args.harness, session=payload.get('session'))
+            if payload.get('session'):
+                try:  # iş receipt'le kapandı: bu oturumun devir kartı artık yarım iş değil (silmeden arşive)
+                    import beyin_v3_devir as devir_mod
+                    if devir_mod.kapat(vault, str(payload['session']), "receipt yazıldı"):
+                        import beyin_v3_oturum as oturum
+                        oturum.derle(vault, state)
+                except Exception:
+                    pass
         elif args.command == "history":
             # History is source-verified, so refresh first like context: an edit
             # made just before this command must not hide the audit trail.

@@ -364,14 +364,17 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
                     cleaned.append(dict(group, hooks=remaining))
             hooks[event] = cleaned
         posix, windows = commands([sys.executable, hook, "--vault", vault, "--state", state, "--harness", harness])
-        for event in ("SessionStart", "UserPromptSubmit", "Stop", "PostToolUse", "PreCompact", "SessionEnd"):
+        events = ("SessionStart", "UserPromptSubmit", "Stop", "PostToolUse", "PreCompact", "SessionEnd")
+        if harness == "claude":  # API hatası/limitle kesilen tur Stop yerine StopFailure tetikler (devir kartı)
+            events += ("StopFailure",)
+        for event in events:
             timeout = 3 if event == "SessionEnd" else (20 if os.name == "nt" else 5)
             handler = {"type": "command", "command": windows if os.name == "nt" else posix, "timeout": timeout}
             if harness == "codex":
                 handler["commandWindows"] = windows
             group = {"hooks": [handler]}
-            if event == "PostToolUse":
-                group["matcher"] = "Edit|Write|apply_patch"
+            # PostToolUse tüm araçlarda çalışır (devir kartı uzun Bash işlerinde de güncel kalsın); hook,
+            # düzenleme dışı araçlarda yalnız devir kartını günceller ve başka işlem yapmaz.
             hooks.setdefault(event, []).append(group)
         add(name, jbytes(data))
         manifest.setdefault("new_commands", []).extend([posix, windows])
@@ -433,7 +436,11 @@ protokolünü uygula: oturumun kendi kartını
 `python3 beyin.py oturum yaz --session <Receipt session> --etiket <etiket> --proje <proje>`
 ile yaz (gövde stdin'den; aynı oturum+etiket tekrar yazılırsa kendi kartı güncellenir).
 Last-Session.md bu kartlardan üretilen özettir, elle düzenleme; başka oturumların kartına
-dokunma. Açık konuyu Threads'te yerinde güncelle, kalıcı öğrenimi kaynak bağlantılı
+dokunma. Last-Session.md'nin başında `Yarım kalan işler (devir)` varsa başka bir istemcinin işi limit ya da
+kesintiyle yarıda kalmıştır. Kullanıcı devam isterse ya da konuşma o işe dönerse önce
+`beyin.py devir goster <sid> --detay` ile kartı ve sohbetin son turlarını oku, kaldığı yerden sürdür;
+bitince kendi kartını ve receipt'ini yaz (`beyin.py devir kapat <sid>` kartı arşive taşır). Devir
+kartlarını hook model çağırmadan kendisi yazar; elle düzenleme. Açık konuyu Threads'te yerinde güncelle, kalıcı öğrenimi kaynak bağlantılı
 knowledge notuna kaydet. Açık kullanıcı düzeltmesini refleks olarak kaydet:
 `python3 beyin.py refleks ekle "<bir iki satırlık kural>" --kapsam <proje|genel> --tur duzeltme`.
 Komut benzer refleks gösterirse ve anlam aynıysa `--refleks <id>` ile kanıt ekle, farklıysa

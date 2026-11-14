@@ -38,6 +38,11 @@ başka oturumların kartına dokunma. `Threads.md` içindeki
 açık konuları yerinde düzelt, önemli bir şey olduysa `Journal.md` dosyasına kısa bir giriş ekle.
 Kullanıcı seni düzelttiğinde ("bunu böyle yapma") o düzeltmeyi refleks olarak kaydet:
 `python3 beyin.py refleks ekle "<kural>" --kapsam <proje|genel> --tur duzeltme` (ayrıntı: beyin skill'i).
+Last-Session.md'nin başında `Yarım kalan işler (devir)` varsa başka bir istemcinin işi limit ya da
+kesintiyle yarıda kalmıştır. Kullanıcı devam isterse ya da konuşma o işe dönerse önce
+`beyin.py devir goster <sid> --detay` ile kartı ve sohbetin son turlarını oku, kaldığı yerden sürdür;
+bitince kendi kartını ve receipt'ini yaz (`beyin.py devir kapat <sid>` kartı arşive taşır). Devir
+kartlarını hook model çağırmadan kendisi yazar; elle düzenleme.
 
 **Devir kuralı:** her anlamlı oturum iz bırakır. Ya bir not, ya bir karar, ya güncellenmiş dosya.
 **Doğrulama:** bu dosya yönlendiricidir. Proje gerçeği için güncel dosyaları doğrula.

@@ -12,7 +12,10 @@ sys.dont_write_bytecode = True
 import time
 import uuid
 
-EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact", "SessionEnd"}
+EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "StopFailure", "PreCompact", "SessionEnd"}
+# Devir kartı (beyin_v3_devir): limit/kesinti iş ortasında gelse de başka bir istemci kaldığı yerden devam edebilsin.
+DEVIR_EVENTS = {"UserPromptSubmit", "PostToolUse", "Stop", "StopFailure", "PreCompact", "SessionEnd"}
+EDIT_TOOL = re.compile(r"Edit|Write|apply_patch")
 HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
 RECEIPT_REMINDER = (
     "Files were edited in this session but no receipt was written after the edits. If the work is done, write one now: "
@@ -443,6 +446,24 @@ def _main():
         payload["hook_event_name"] = event
         if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or os.environ.get("BEYIN_V3_SKIP") == "1" or payload.get('no_memory') is True \
                 or no_memory_session(state, payload.get('session_id')):
+            print("{}")
+            return
+        if event in DEVIR_EVENTS and not args.metadata_only:
+            try:
+                from beyin_v3_devir import guncelle
+                proje = None
+                try:
+                    from beyin_v3_refleks import _read_json, _session_path
+                    record = _read_json(_session_path(state, args.harness + ':' + str(payload.get('session_id'))), {})
+                    proje = ', '.join(sorted(record.get('projects', {}))) or None
+                except Exception:
+                    proje = None
+                guncelle(vault, state, args.harness, payload, event, project=proje)
+            except Exception:
+                pass  # devir kartı turu asla düşürmez
+        # StopFailure yalnız devir içindir (çıktısı yok sayılır); matcher'sız PostToolUse'ta düzenleme dışı araçlar
+        # eskisi gibi başka hiçbir işlemi tetiklemez.
+        if event == "StopFailure" or (event == "PostToolUse" and not EDIT_TOOL.search(str(payload.get("tool_name") or "Edit"))):
             print("{}")
             return
         if event == 'UserPromptSubmit' and not args.metadata_only and not is_synthetic_prompt(payload):

@@ -34,6 +34,13 @@ de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerind
   açık kaldı, sonraki somut adım, kaynak bağlantıları ve belirsizlikler. Ayrıntısı receipt,
   `daily/` ve knowledge notlarında yaşar, gerekirse oraya tek bağlantı ver. Özet 3.000 karakter
   sınırının altında kalır; sığmayan kartlar dosya bağlantısıyla listelenir.
+- Devir kartı: hook, her istekte, tur sonunda, limit/API hatasıyla kesilen turda (StopFailure) ve
+  araç çağrılarında dakikada bir sohbet kaydından model çağırmadan `<companion>/Devir/<sid>-<istemci>.md`
+  yazar (son istekler, görev listesi, değişen dosyalar, son mesaj, kayıt yolu). Kesilen ya da görev
+  listesi bitmemiş kartlar Last-Session.md'nin başında `Yarım kalan işler (devir)` olarak görünür.
+  Devralırken `beyin.py devir goster <sid> --detay` ile oku ve kaldığı yerden sürdür; bitince kendi
+  kartını ve receipt'ini yaz, `beyin.py devir kapat <sid>` ile kapat. Aynı oturumun `oturum yaz` ya da
+  receipt'i kartı kendiliğinden kapatır (silmez, `Devir/Arşiv/`'e taşır). Devir kartını elle düzenleme.
 - Threads.md: açık konunun gövdesini, sahibini ve sonraki adımını yerinde güncelle; her
   güncellemede yeni tarihli paragraf ekleme. Biten konuyu kapalı bölümüne kısa bir satırla
   al. Başlıklardan ibaret bir listeye indirgeme. Varsayılan sınır 8.000 karakter.

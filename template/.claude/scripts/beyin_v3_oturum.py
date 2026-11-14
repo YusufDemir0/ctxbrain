@@ -78,7 +78,12 @@ def derle(vault, state=None):
             picked.append(c)
     picked += [c for c in allc if c not in picked]
     picked.sort(key=lambda c: c["when"], reverse=True)
-    budget = _budget(state)
+    try:  # yarım kalan işler (devir kartları) en üstte; hata özeti asla düşürmez
+        from beyin_v3_devir import ozet
+        devir = ozet(vault)
+    except Exception:
+        devir = ""
+    budget = _budget(state) - len(devir)
     shown = [(c, _shorten(c)) for c in picked]
 
     def render(count):
@@ -87,7 +92,7 @@ def derle(vault, state=None):
         if rest:
             tail = "\n\n## Diğer kartlar\n" + "\n".join(
                 f"- {c['when']} · {c['label']} · {c['sid']} → `Oturumlar/{c['path'].name}`" for c in rest[:8])
-        return INTRO + "\n" + "\n\n".join(block for _, block in shown[:count]) + tail + "\n"
+        return INTRO + "\n" + (devir + "\n" if devir else "") + "\n\n".join(block for _, block in shown[:count]) + tail + "\n"
 
     # The link list counts against the budget too: drop the oldest full card until it all fits.
     count = len(shown)
@@ -113,8 +118,13 @@ def yaz(vault, state, session, etiket, body, proje=None, now=None):
     when = mine[0]["when"] if mine else f"{now:%Y-%m-%d %H:%M}"
     line = f"Proje: {' '.join(proje.split())}\n" if proje and proje.strip() else ""
     _atomic(path, f"## {when} · {etiket} · {sid}\n{line}{body.strip()}\n")
+    try:  # kendi kartını yazan oturumun devir kartı artık gereksiz: silmeden arşive
+        from beyin_v3_devir import kapat
+        closed = kapat(vault, sid, "oturum kartı yazıldı")
+    except Exception:
+        closed = 0
     result = derle(vault, state)
-    return dict(result, card=path.relative_to(Path(vault).resolve()).as_posix(), updated=bool(mine))
+    return dict(result, card=path.relative_to(Path(vault).resolve()).as_posix(), updated=bool(mine), devir_closed=closed)
 
 
 def liste(vault):

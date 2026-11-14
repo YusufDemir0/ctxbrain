@@ -148,6 +148,13 @@ işlerde sorar, geri alınabilir işlerde ilerler ama "şu seçeneklerden şunu 
 
 Hepsi vault klasöründe çalışır: `python3 beyin.py <komut>` (Windows: `py -3 beyin.py`).
 
+**Devir kartı (5.0.5):** limit ya da API hatası iş ortasında gelirse oturum kartı yazılamaz. Bu yüzden hook,
+her istekte, tur sonunda, kesilen turda (`StopFailure`) ve araç çağrılarında dakikada bir, sohbet kaydından
+model çağırmadan `🔮 850-Companion/Devir/` altına bir devir kartı yazar: son istekler, görev listesi, değişen
+dosyalar, son mesaj ve kayıt yolu. Kesilen ya da bitmemiş işler `Last-Session.md`'nin başında görünür; başka bir
+istemci (Codex, Claude, ...) `beyin.py devir goster <sid> --detay` ile devralır. Claude ve Codex kayıtlarının
+ikisi de okunur.
+
 | Komut | Ne yapar |
 |---|---|
 | `doctor [--human]` | Sağlık: hook'lar, senkron, sürüm, hafıza hijyeni |
@@ -160,6 +167,7 @@ Hepsi vault klasöründe çalışır: `python3 beyin.py <komut>` (Windows: `py -
 | `refleks gocet [--uygula]` | Tek projeye ait kuralları `Kurallar.md`'den reflekse taşı |
 | `oturum yaz --session <id> --etiket <etiket> --proje <proje>` | Oturum kartını yaz (gövde stdin'den) |
 | `oturum liste` / `oturum derle` | Kartları listele / `Last-Session.md`'yi yeniden üret |
+| `devir liste` / `devir goster <sid> [--detay]` / `devir kapat <sid>` | Yarım kalan işler: listele, devral (son turlarla), kapat |
 | `yapilacak ekle "<iş>" --proje <proje>` | İşi sonraya kaydet |
 | `yapilacak liste` / `yapilacak uygulandi <ID> --sonuc "…"` | Bekleyenler / işi kapat |
 | `receipt --event-id <id> --summary "…" --ref <yol> --harness <istemci>` | Oturum sonucunu kaynaklı kaydet |
