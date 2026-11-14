@@ -83,7 +83,7 @@ def derle(vault, state=None):
         devir = ozet(vault)
     except Exception:
         devir = ""
-    budget = _budget(state) - len(devir)
+    budget = _budget(state)  # render() devir bölümünü zaten sayar; ayrıca düşülmez
     shown = [(c, _shorten(c)) for c in picked]
 
     def render(count):

@@ -92,6 +92,14 @@ class DevirTest(unittest.TestCase):
         self.assertIn('## Yarım kalan işler (devir)', last)
         self.assertIn(f'beyin.py devir goster {SID}', last)
 
+    def test_summary_keeps_room_for_session_cards(self):
+        oturum.yaz(self.vault, None, 'aaaaaaaa11', 'onceki', '- ' + 'x' * 800, proje='web')
+        devir.guncelle(self.vault, self.state, 'claude', self.payload(error='rate_limit'), 'StopFailure')
+        last = self.last()
+        self.assertIn('## Yarım kalan işler (devir)', last)
+        self.assertIn('· onceki · aaaaaaaa', last.split('## Diğer kartlar')[0])   # kart tam gösteriliyor
+        self.assertLessEqual(len(last), 3000)
+
     def test_tool_events_are_throttled_but_turn_end_is_not(self):
         self.assertIsNotNone(devir.guncelle(self.vault, self.state, 'claude', self.payload(), 'PostToolUse'))
         self.assertIsNone(devir.guncelle(self.vault, self.state, 'claude', self.payload(), 'PostToolUse'))
