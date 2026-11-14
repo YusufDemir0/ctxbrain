@@ -116,6 +116,18 @@ class DevirTest(unittest.TestCase):
         self.assertIn('Durum: kapandı (oturum kartı yazıldı', archived[0].read_text(encoding='utf-8'))
         self.assertNotIn('Yarım kalan işler', self.last())
 
+    def test_closed_card_reopens_only_on_a_new_request(self):
+        devir.guncelle(self.vault, self.state, 'claude', self.payload(), 'Stop')
+        devir.kapat(self.vault, SID, "test")
+        self.assertIsNone(devir.guncelle(self.vault, self.state, 'claude', self.payload(), 'Stop'))
+        self.assertEqual(devir.acik(self.vault), [])
+        rows = [json.loads(l) for l in self.transcript.read_text(encoding='utf-8').splitlines()]
+        rows.append({"type": "user", "timestamp": "2099-01-01T00:00:00Z",
+                     "message": {"role": "user", "content": "şimdi yeni bir iş"}})
+        self.transcript.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+        self.assertIsNotNone(devir.guncelle(self.vault, self.state, 'claude', self.payload(), 'UserPromptSubmit'))
+        self.assertEqual(len(devir.acik(self.vault)), 1)
+
     def test_codex_rollout_is_parsed_and_detail_shows_turns(self):
         roll = Path(self.tmp.name) / 'rollout.jsonl'
         codex_rollout(roll)

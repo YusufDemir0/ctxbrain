@@ -266,6 +266,18 @@ def render(harness, sid, info, event, error, project, transcript, now):
     return "\n".join(lines) + "\n"
 
 
+def _new_request_since(info, closed_at):
+    """Kapanıştan sonra yeni kullanıcı isteği var mı (kayıt zamanları UTC)."""
+    if not info["requests"]:
+        return False
+    try:
+        from datetime import timezone
+        when = datetime.strptime(info["requests"][-1][0], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        return when.timestamp() > closed_at
+    except (ValueError, TypeError):
+        return False
+
+
 def _card_path(folder, harness, sid):
     return folder / f"{sid}-{harness}.md"
 
@@ -296,6 +308,9 @@ def guncelle(vault, state, harness, payload, event, project=None, now=None):
         info = parse(harness, path)
         if not (info["requests"] or info["plan"] or info["files"]):
             return None
+        archived = folder / "Arşiv" / f"{sid}-{harness}.md"
+        if archived.exists() and not _new_request_since(info, archived.stat().st_mtime):
+            return None  # kart kapatıldı (oturum kartı/receipt); yeni istek gelmeden yeniden açılmaz
         if event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
             info["last_assistant"] = payload["last_assistant_message"]
         error = payload.get("error") or payload.get("error_details")
