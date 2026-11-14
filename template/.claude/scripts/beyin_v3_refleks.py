@@ -233,15 +233,21 @@ def _day(value):
 def weight(reflex, today=None, last_fired=None):
     today = today or date.today()
     fired = _day(last_fired) if last_fired else None
-    total = 0.0
-    for item in reflex['kanit']:
+    items = []
+    for idx, item in enumerate(reflex['kanit']):
         when = _day(item['date'])
-        if when is None:
+        if when is None or item['type'] not in STRENGTH:
             continue
-        # Firing without being corrected keeps the evidence fresh: a used reflex does not fade.
-        fresh = max(when, fired) if fired and STRENGTH[item['type']] > 0 else when
+        items.append((when, idx, STRENGTH[item['type']]))
+    base = sum(s * 0.5 ** (max(0, (today - w).days) / HALF_LIFE) for w, _, s in items)
+    latest_positive = bool(items) and max(items, key=lambda x: (x[0], x[1]))[2] > 0
+    # Refresh positive evidence on firing only when the reflex is still net positive and not contradicted last.
+    refresh = bool(fired and latest_positive and base > 1e-9)
+    total = 0.0
+    for when, _, strength in items:
+        fresh = max(when, fired) if refresh and strength > 0 else when
         age = max(0, (today - fresh).days)
-        total += STRENGTH[item['type']] * 0.5 ** (age / HALF_LIFE)
+        total += strength * 0.5 ** (age / HALF_LIFE)
     return round(total, 3)
 
 
@@ -250,6 +256,8 @@ def state_of(reflex, today=None, last_fired=None):
         return 'cekirdek'
     today = today or date.today()
     w = weight(reflex, today, last_fired)
+    if w <= 0:
+        return 'sonmus'
     dates = [d for d in (_day(e['date']) for e in reflex['kanit']) if d]
     latest = max([d for d in dates] + ([_day(last_fired)] if last_fired and _day(last_fired) else []), default=None)
     if w < FADE_WEIGHT and (latest is None or (today - latest).days >= FADE_DAYS):
@@ -344,6 +352,7 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
     fresh = set()  # scopes named or touched in this very event
     if event == 'UserPromptSubmit':
         projects = {k: v - 1 for k, v in projects.items() if v - 1 > 0}
+    if event in ('SessionStart', 'UserPromptSubmit') and prompt:
         for key in scopes_in(prompt, entries):
             projects[key] = SESSION_TURNS
             fresh.add(key)
@@ -368,7 +377,8 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
         in_scope = bool(scoped & fresh)
         if state_of(reflex, today, used.get(reflex['id'])) == 'sonmus':
             # Forgotten, not lost: returning to its project brings it back, marked as old.
-            if not in_scope:
+            # Cancelled reflexes (weight <= 0) never re-enter context until positive evidence arrives.
+            if not in_scope or weight(reflex, today, used.get(reflex['id'])) <= 0:
                 continue
             faded.add(reflex['id'])
         hit = (not scoped) or in_scope
@@ -396,8 +406,10 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
         active = ', '.join(sorted(projects)) or 'genel'
         text += (f'Refleksler (etkin kapsam: {active}; kullanıcının kanıtla ağırlıklanmış davranışları, '
                  'çelişirse en olasıyı öner ve alternatifi söyle):\n' + '\n'.join(lines) + '\n')
-    if event == 'SessionStart':
-        pending = suggestions(state, take=True)
+    if event == 'SessionStart' or fresh:
+        pending = suggestions(state, take=True, scopes=fresh, today=today,
+                              include_global=(event == 'SessionStart'),
+                              exclude_session=None if event == 'SessionStart' else session)
         if pending:
             text += ('Refleks önerileri (önceki oturumlarda yakalanan cümlelerden; kullanıcıyla doğrula, '
                      'uygunsa uygula ve hangisini seçtiğini söyle):\n' + '\n'.join(pending) + '\n')
@@ -721,7 +733,45 @@ def closing_draft(vault, state, session, days=2, capture_session=None):
 STRONG = (0.6, 5)        # containment, shared roots: the same rule said again, added on its own
 LIKELY = (0.35, 4)       # probably the same rule: the agent confirms before it counts
 SUGGESTIONS = 'refleks-oneriler.json'
+SUGGESTION_DAYS = 14
 MAX_SUGGESTIONS = 20
+
+# Correction/simplification decisions folded via `fold()` also warrant reflex candidacy.
+CORRECTION_DECISION = re.compile(
+    r'\b(?:'
+    r'yerine\b[^.!?\n]{0,60}\b(?:olsun\w*|olmali\w*|kalsin\w*|kullan(?:alim|in|ilsin|sin|acak|acagiz|ma\w*)?'
+    r'|yap(?:alim|in|ilsin|sin|ma\w*)?|sec(?:elim|in|ilsin)?|gec(?:elim|in|ilsin)?'
+    r'|koy(?:alim|in|ulsun)?|yaz(?:alim|in|ilsin)?|tercih\w*)'
+    r'|degil\b[^.!?\n]{0,40}\b(?:olsun\w*|olmali\w*|kalsin\w*|kullan(?:alim|in|ilsin|sin|ma\w*)?'
+    r'|yap(?:alim|in|ilsin|sin|ma\w*)?|sec(?:elim|in|ilsin)?)'
+    r'|gere[kg]\w*(?:\s+(?:de|da|hic))?\s+(?:yok\w*|degil\w*|kalma\w*|duy(?:ul)?m\w*|gorm\w*|olma\w*)'
+    r'|gerek(?:mez|miyor\w*|meyecek\w*|medi\w*|mesin\w*)|gereksiz\w*'
+    r'|ihtiyac\w*(?:\s+(?:da|de|hic|artik))?\s+(?:yok\w*|degil\w*|kalma\w*|olma\w*|duy(?:ul)?m(?:a|uyor|az|ayacak)\w*)'
+    r'|kalsin\w*|kalmasin\w*'
+    r'|(?:sadelik|basitlik|yalinlik|kisalik)\w*(?:\s+\w+){0,2}\s+(?:daha\s+iyi\w*|onemli\w*|olsun\w*|tercih\w*)'
+    r'|daha\s+(?:sade|basit|yalin|kisa|az|oz)\w*'
+    r'|(?:sade|basit|yalin|kisa|ozet)\w*\s+(?:daha\s+iyi\w*|olsun\w*|olmali\w*|tut\w*|kal\w*)'
+    r'|sadeles\w*|basitles\w*|kisalt\w*|yalinlas\w*'
+    r'|olmasin\w*|olmamali\w*|(?:yap|kullan|ekle|yaz|gir|koy|degistir)(?:mayalim|meyelim|mayin\w*|meyin\w*|masin\w*|mesin\w*)'
+    r'|instead\s+of|no\s+need\s+(?:for|to)|don\'?t\s+need|keep\s+(?:it|things)\s+(?:simple|minimal)|simpler\s+is\s+better'
+    r')\b'
+)
+
+
+def _is_correction_decision(sentence):
+    return CORRECTION_DECISION.search(fold(sentence)) is not None
+
+
+def _expired_suggestion(item, today):
+    when = _day(item.get('tarih'))
+    return when is not None and (today - when).days >= SUGGESTION_DAYS
+
+
+def _suggestion_matches(item, scopes, include_global=True):
+    item_scopes = [s for s in (item.get('kapsam') or []) if s and fold(s) != 'genel']
+    if not item_scopes:
+        return include_global
+    return bool(set(item_scopes) & scopes)
 
 
 def _match(sentence, reflex):
@@ -736,9 +786,9 @@ def absorb(vault, state, session, found, today=None):
     """Turn the user's captured sentences into reflex evidence.
 
     `found` is the capture's [(kind, sentence)]. A sentence that clearly restates a reflex in scope
-    becomes `tekrar` evidence at once; a probable match, or a rule sentence that matches no reflex,
-    is queued as a suggestion the agent sees at the closing draft and the next session start.
-    Returns {'kanit': [...ids], 'oneri': n}. Never raises past the hook.
+    becomes `tekrar` evidence at once; a probable match, or a rule / correction-decision sentence
+    that matches no reflex, is queued as a suggestion the agent sees at the closing draft and when
+    its scope becomes active. Returns {'kanit': [...ids], 'oneri': n}. Never raises past the hook.
     """
     result = {'kanit': [], 'oneri': 0}
     try:
@@ -747,7 +797,9 @@ def absorb(vault, state, session, found, today=None):
         record = _read_json(_session_path(state, session), {})
         entries = dictionary(vault) if (folder(vault) / DICTIONARY).is_file() else {}
         queue_path = Path(state) / SUGGESTIONS
-        queue = _read_json(queue_path, [])
+        raw_queue = _read_json(queue_path, [])
+        queue = [q for q in raw_queue if not _expired_suggestion(q, today)]
+        pruned = len(queue) != len(raw_queue)
         for kind, sentence in found:
             if kind not in ('kural', 'karar'):
                 continue
@@ -762,8 +814,9 @@ def absorb(vault, state, session, found, today=None):
                     result['kanit'].append(reflex['id'])
                 continue
             if reflex and score >= LIKELY[0] and shared >= LIKELY[1]:
-                item = {'tur': 'olasi_tekrar', 'refleks': reflex['id'], 'metin': sentence}
-            elif kind == 'kural':
+                item = {'tur': 'olasi_tekrar', 'refleks': reflex['id'],
+                        'kapsam': list(reflex['kapsam']), 'metin': sentence}
+            elif kind == 'kural' or (kind == 'karar' and _is_correction_decision(sentence)):
                 item = {'tur': 'aday', 'kapsam': sorted(scopes), 'metin': sentence}
             else:
                 continue
@@ -771,7 +824,7 @@ def absorb(vault, state, session, found, today=None):
                 queue.append(dict(item, oturum=hashlib.sha256(str(session).encode('utf-8')).hexdigest()[:12],
                                   tarih=today.isoformat()))
                 result['oneri'] += 1
-        if result['oneri']:
+        if result['oneri'] or pruned:
             _write_json(queue_path, queue[-MAX_SUGGESTIONS:])
     except Exception:
         pass
@@ -786,13 +839,33 @@ def _suggestion_line(item):
     return f"- «{item['metin'][:140]}» henüz refleks değil; kalıcı bir kuralsa `beyin.py refleks ekle \"<kural>\" --kapsam {scope} --tur kural`"
 
 
-def suggestions(state, session=None, take=False, limit=3):
-    """Pending suggestions as hook lines. With a session: only that session's. take=True removes
-    the returned ones, so each suggestion is said once."""
+def suggestions(state, session=None, take=False, limit=3, scopes=None, today=None,
+                include_global=True, exclude_session=None):
+    """Pending suggestions as hook lines.
+
+    With `session`: only that session's. With `scopes` (iterable, not None): only matching scopes
+    (plus global suggestions when `include_global` is true). `take=True` removes only the
+    returned suggestions and drops entries older than SUGGESTION_DAYS.
+    """
     path = Path(state) / SUGGESTIONS
     queue = _read_json(path, [])
+    today = today or date.today()
+    fresh = [q for q in queue if not _expired_suggestion(q, today)]
     key = hashlib.sha256(str(session).encode('utf-8')).hexdigest()[:12] if session else None
-    picked = [q for q in queue if key is None or q.get('oturum') == key][:limit]
-    if take and picked:
-        _write_json(path, [q for q in queue if q not in picked])
+    excluded = hashlib.sha256(str(exclude_session).encode('utf-8')).hexdigest()[:12] if exclude_session else None
+    scope_set = set(scopes) if scopes is not None else None
+    picked = []
+    for q in fresh:
+        if key is not None and q.get('oturum') != key:
+            continue
+        if excluded is not None and q.get('oturum') == excluded:
+            continue
+        if scope_set is not None and not _suggestion_matches(q, scope_set, include_global=include_global):
+            continue
+        picked.append(q)
+        if len(picked) == limit:
+            break
+    if take and (picked or len(fresh) != len(queue)):
+        picked_ids = {id(q) for q in picked}
+        _write_json(path, [q for q in fresh if id(q) not in picked_ids])
     return [_suggestion_line(q) for q in picked]
