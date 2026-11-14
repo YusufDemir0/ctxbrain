@@ -268,6 +268,114 @@ class CliTest(unittest.TestCase):
             self.assertNotEqual(missing.returncode, 0)
 
 
+class BudgetSelectionTest(VaultBase):
+    def test_relevant_low_weight_reflex_enters_turn_budget_with_forty_plus_reflexes(self):
+        detail = 'Bu kural yalnızca sentetik bütçe testi için uzun tutulmuştur ve başka konu içerir.'
+        for n in range(42):
+            rid = refleks.ekle(self.vault, f'Depo etiketi numara {n}: barkod basımı yapılır. {detail}',
+                               ['magaza-erp'], 'kural', yeni=True)['id']
+            refleks.ekle(self.vault, f'Depo etiketi numara {n}: barkod basımı yapılır',
+                         ['magaza-erp'], 'kural', refleks_id=rid)
+        relevant = refleks.ekle(
+            self.vault, 'Sevkiyat fişinde KDV yuvarlama her zaman satır bazında yapılır',
+            ['magaza-erp'], 'gozlem', yeni=True)['id']
+        self.fire('SessionStart')
+        out = self.fire('UserPromptSubmit', 'sevkiyat fişinde kdv yuvarlama hatasını düzelt')
+        self.assertLessEqual(len(out), refleks.TURN_CHARS)
+        self.assertIn(relevant, out)
+        self.assertIn('KDV yuvarlama her zaman satır bazında yapılır', out)
+        self.assertIn('beyin.py refleks liste', out)
+        self.assertLess(out.index(relevant), out.index('Depo etiketi numara'))
+
+    def test_session_start_without_prompt_preserves_weight_order(self):
+        filler = 'Genel kural ayrıntısı bütçeyi doldurmak için yeterince uzun yazıldı.'
+        ids = []
+        for n in range(42):
+            tur = 'kural' if n < 15 else ('karar' if n < 30 else 'gozlem')
+            rid = refleks.ekle(self.vault, f'Genel refleks {n:02d}: standart biçim korunur. {filler}',
+                               [], tur, yeni=True)['id']
+            if n < 5:
+                refleks.ekle(self.vault, f'Genel refleks {n:02d} tekrarı', [], 'kural', refleks_id=rid)
+            ids.append(rid)
+        out = self.fire('SessionStart')
+        self.assertLessEqual(len(out), refleks.OPENING_CHARS)
+        self.assertIn('beyin.py refleks liste', out)
+        for rid in ids[:4]:
+            self.assertIn(rid, out)
+        for rid in ids[-10:]:
+            self.assertNotIn(rid, out)
+        positions = [out.index(rid) for rid in ids[:4]]
+        # Higher-weight reflexes (weight 2.0) appear before single-evidence ones (weight 1.0)
+        self.assertIn(ids[5], out)
+        self.assertLess(max(positions), out.index(ids[5]))
+
+    def test_core_reflex_is_always_first(self):
+        core_id = refleks.ekle(self.vault, 'Temel çekirdek ilke: önce doğrulamayı kontrol et',
+                               [], 'gozlem', tarih=day(40), yeni=True)['id']
+        refleks.set_core(self.vault, core_id)
+        high_id = refleks.ekle(self.vault, 'Yüksek ağırlıklı kural: raporları dışa aktar',
+                               [], 'kural', yeni=True)['id']
+        refleks.ekle(self.vault, 'Yüksek ağırlıklı kural tekrarı', [], 'kural', refleks_id=high_id)
+        refleks.ekle(self.vault, 'Yüksek ağırlıklı kural üçüncü', [], 'kural', refleks_id=high_id)
+        rel_id = refleks.ekle(self.vault, 'Sevkiyat kdv yuvarlama satırdan yapılır',
+                              ['magaza-erp'], 'kural', yeni=True)['id']
+        opening = self.fire('SessionStart', session='core-open')
+        self.assertIn(core_id, opening)
+        self.assertLess(opening.index(core_id), opening.index(high_id))
+        turn = self.fire('UserPromptSubmit', 'sevkiyat kdv yuvarlama', session='core-turn')
+        self.assertIn(core_id, turn)
+        self.assertIn(rel_id, turn)
+        self.assertLess(turn.index(core_id), turn.index(rel_id))
+        self.assertLess(turn.index(core_id), turn.index(high_id))
+
+    def test_shortened_form_preserves_id_packs_more_and_stays_within_budget(self):
+        tail = 'İkinci cümle yalnızca ayrıntı ve uzun örnek anlatımı ekler. ' * 7
+        ids = []
+        for n in range(10):
+            rid = refleks.ekle(
+                self.vault, f'Uzun kural {n}: ilk cümle kısa tutulur. {tail}',
+                [], 'kural', tarih=day(n), yeni=True)['id']
+            ids.append(rid)
+        out = self.fire('SessionStart')
+        self.assertLessEqual(len(out), refleks.OPENING_CHARS)
+        shown = [rid for rid in ids if rid in out]
+        # Full lines alone (~480 chars each) would fit at most 2; shortened form fits more.
+        self.assertGreater(len(shown), 2)
+        self.assertIn('İkinci cümle', out)
+        self.assertIn('ilk cümle kısa tutulur.', out)
+        shortened_lines = [line for line in out.splitlines() if line.startswith('- [') and 'İkinci cümle' not in line]
+        self.assertTrue(shortened_lines)
+        for line in shortened_lines:
+            self.assertTrue(any(rid in line for rid in shown), line)
+        self.assertIn('beyin.py refleks liste', out)
+
+    def test_oversized_first_reflex_falls_back_to_shortened_within_budget(self):
+        long_body = 'Tek uzun cümle noktasız devam ediyor ' * 45 + 'SON_KELIME'
+        r1 = refleks.ekle(self.vault, f'Başlıca kural: kısa özet cümlesi. {long_body}',
+                          [], 'kural', tarih=day(0), yeni=True)['id']
+        r2 = refleks.ekle(self.vault, long_body, [], 'kural', tarih=day(1), yeni=True)['id']
+        out = self.fire('SessionStart')
+        self.assertLessEqual(len(out), refleks.OPENING_CHARS)
+        self.assertIn(r1, out)
+        self.assertIn(r2, out)
+        self.assertIn('kısa özet cümlesi.', out)
+        self.assertIn('…', out)
+        self.assertNotIn('SON_KELIME', out)
+
+    def test_all_remaining_reflexes_fitting_shortened_emit_no_overflow_line(self):
+        tail = 'Ayrıntılı ikinci cümle uzun metin ekler. ' * 9
+        ids = [
+            refleks.ekle(self.vault, f'Kısa kural {n}: net özet cümlesi. {tail}',
+                         [], 'kural', tarih=day(n), yeni=True)['id']
+            for n in range(4)
+        ]
+        out = self.fire('SessionStart')
+        self.assertLessEqual(len(out), refleks.OPENING_CHARS)
+        for rid in ids:
+            self.assertIn(rid, out)
+        self.assertNotIn('beyin.py refleks liste', out)
+
+
 if __name__ == '__main__':
     unittest.main()
 

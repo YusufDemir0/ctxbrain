@@ -30,6 +30,8 @@ FADE_DAYS = 90
 SESSION_TURNS = 6         # an active scope stays active this many prompts without a new mention
 OPENING_CHARS = 1500
 TURN_CHARS = 3000
+SHORT_CHARS = 120
+RELEVANCE_BOOST = 3.0
 CORE_MIN_EVIDENCE = 3
 CORE_MIN_SPAN = 30        # days between first and last positive evidence
 CORE_QUIET_CONTRA = 60    # no contrary evidence in this many days
@@ -310,10 +312,51 @@ def _prune_sessions(state, keep_days=7):
 
 # ---------- triggering ----------
 
-def _line(reflex, w, faded=False):
+def _shorten(text, limit=SHORT_CHARS):
+    """Shorten reflex text to its first sentence (or `limit` chars) for tight budgets."""
+    text = ' '.join(str(text).split())
+    end = re.search(r'(?<!\d)[.!?](?=\s)', text[10:]) if len(text) > 10 else None
+    if end:
+        first = text[:10 + end.end()]
+        if len(first) <= limit:
+            return first + ' …' if len(first) + 2 <= limit else first
+    else:
+        first = text
+    if len(first) <= limit:
+        return first
+    cut = first[:limit - 1].rstrip()
+    if ' ' in cut:
+        head = cut.rsplit(' ', 1)[0]
+        if len(head) >= limit // 2:
+            cut = head
+    return cut.rstrip('.,;:!? ') + '…'
+
+
+def _relevance(prompt, reflex):
+    """Overlap score in [0.0, 1.0] between prompt and reflex text using existing root stems."""
+    return similarity(prompt, reflex['metin']) if prompt else 0.0
+
+
+def _score(w, relevance):
+    """Combined ranking score: bounded weight plus prompt relevance.
+
+    Formula:
+        weight_norm = w / (1.0 + abs(w))        # monotonic in weight, bounded in (-1, 1)
+        score = weight_norm + RELEVANCE_BOOST * relevance
+    When prompt is empty (relevance == 0.0), ranking reduces strictly to weight order.
+    """
+    return w / (1.0 + abs(w)) + RELEVANCE_BOOST * relevance
+
+
+def _line(reflex, w, faded=False, short=False):
     scope = ', '.join(reflex['kapsam']) or 'genel'
     mark = 'çekirdek' if reflex['durum'] == 'cekirdek' else ('eski, doğrula' if faded else f'ağırlık {w:.1f}')
-    return f"- [{reflex['id']} · {scope} · {mark}] {reflex['metin']}"
+    body = _shorten(reflex['metin']) if short else reflex['metin']
+    return f"- [{reflex['id']} · {scope} · {mark}] {body}"
+
+
+def _overflow_line(remaining):
+    return f'- (+{remaining} refleks daha sonraki turlarda; tamamı: `beyin.py refleks liste`)'
 
 
 def _fit(lines, budget):
@@ -324,6 +367,41 @@ def _fit(lines, budget):
         out.append(line)
         used += len(line) + 1
     return out
+
+
+def _fit_reflexes(ranked, faded, budget, header_len):
+    """Fit full reflex lines first, then shortened lines for remaining ones, within `budget`."""
+    total = len(ranked)
+    if not total:
+        return [], []
+    lines, shown = [], []
+    used = header_len
+
+    def can_fit(line, next_count):
+        extra = len(_overflow_line(total - next_count)) + 1 if next_count < total else 0
+        return used + len(line) + 1 + extra <= budget
+
+    for r, w in ranked:
+        line = _line(r, w, r['id'] in faded, short=False)
+        if not can_fit(line, len(shown) + 1):
+            break
+        lines.append(line)
+        shown.append(r)
+        used += len(line) + 1
+
+    for r, w in ranked[len(shown):]:
+        line = _line(r, w, r['id'] in faded, short=True)
+        if not can_fit(line, len(shown) + 1):
+            break
+        lines.append(line)
+        shown.append(r)
+        used += len(line) + 1
+
+    if len(shown) < total:
+        note = _overflow_line(total - len(shown))
+        if used + len(note) + 1 <= budget:
+            lines.append(note)
+    return lines, shown
 
 
 def trigger(vault, state, session, event, prompt='', paths=(), source=None, today=None):
@@ -376,12 +454,17 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
             hit = scopes_in(folded, {'t': reflex['tetik']}) != set()
         if hit and delivered.get(reflex['id']) != reflex['sha']:
             fired.append(reflex)
-    fired.sort(key=lambda r: (r['durum'] != 'cekirdek', r['id'] in faded, -weight(r, today, used.get(r['id']))))
+    scored = []
+    for r in fired:
+        w = weight(r, today, used.get(r['id']))
+        scored.append((r, w, _score(w, _relevance(prompt, r))))
+    scored.sort(key=lambda item: (item[0]['durum'] != 'cekirdek', item[0]['id'] in faded, -item[2], -item[1]))
+    ranked = [(r, w) for r, w, _ in scored]
     budget = OPENING_CHARS if event == 'SessionStart' else TURN_CHARS
-    lines = _fit([_line(r, weight(r, today, used.get(r['id'])), r['id'] in faded) for r in fired], budget)
-    shown = fired[:len(lines)]
-    if len(shown) < len(fired):
-        lines.append(f'- (+{len(fired) - len(shown)} refleks daha sonraki turlarda; tamamı: `beyin.py refleks liste`)')
+    active = ', '.join(sorted(projects)) or 'genel'
+    header = (f'Refleksler (etkin kapsam: {active}; kullanıcının kanıtla ağırlıklanmış davranışları, '
+              'çelişirse en olasıyı öner ve alternatifi söyle):\n')
+    lines, shown = _fit_reflexes(ranked, faded, budget, len(header))
     if event == 'SessionStart':
         opening_core = [r for r in reflexes if core_candidate(r, today)][:3]
     for reflex in shown:
@@ -393,9 +476,7 @@ def trigger(vault, state, session, event, prompt='', paths=(), source=None, toda
     _write_json(record_path, record)
     text = ''
     if lines:
-        active = ', '.join(sorted(projects)) or 'genel'
-        text += (f'Refleksler (etkin kapsam: {active}; kullanıcının kanıtla ağırlıklanmış davranışları, '
-                 'çelişirse en olasıyı öner ve alternatifi söyle):\n' + '\n'.join(lines) + '\n')
+        text += header + '\n'.join(lines) + '\n'
     if event == 'SessionStart':
         pending = suggestions(state, take=True)
         if pending:
