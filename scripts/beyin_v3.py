@@ -368,6 +368,9 @@ def parser():
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
     history = sub.add_parser("history", help="Read ordered revision snapshots for a record")
     history.add_argument("record_id")
+    sohbetler = sub.add_parser("sohbetler", help="Scan local Claude, Codex and Antigravity sessions without a model call")
+    sohbetler.add_argument("--gun", type=int, default=10, help="Look back N days (default 10)")
+    sohbetler.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON instead of Markdown")
     return root
 
 
@@ -383,14 +386,15 @@ def main(argv=None):
         if state == vault or vault in state.parents:
             raise ValueError("--state must be outside the vault")
         read_only_context = args.command == "context" and args.no_sync
-        if read_only_context:
+        if read_only_context or args.command == "sohbetler":
             # The source CLI can run without the installed entry point, which
             # already disables bytecode. Importing the engine must not write.
             sys.dont_write_bytecode = True
         if read_only_context and args.jev:
             raise ValueError("context --no-sync cannot be combined with --jev")
         # The advisor switch reads and writes one small file; it needs no index or sync engine.
-        engine = load_engine() if args.command != "jev" else None
+        # sohbetler is strictly read-only and must not create state or memory.sqlite3.
+        engine = load_engine() if args.command not in ("jev", "sohbetler") else None
         store = engine.MemoryStore(state, vault, read_only=read_only_context) if engine else None
         sync = load_sync()(vault, state) if args.command in ("sync", "recap", "receipt", "task-update", "note-create", "task-create", "context", "jev-review", "jev-answer", "jev-memory", "history") and not read_only_context else None
         if args.command == "init":
@@ -737,6 +741,20 @@ def main(argv=None):
             else:
                 todo.uygulandi(vault, args.id, args.sonuc)
                 print(f"{args.id} uygulanan işlemlere taşındı")
+            return 0
+        elif args.command == "sohbetler":
+            adjacent = Path(__file__).resolve().parent
+            scripts_dir = adjacent if (adjacent / "beyin_v3_sohbetler.py").exists() else Path(__file__).resolve().parents[1] / "template/.claude/scripts"
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+            import beyin_v3_sohbetler as sohbetler_mod
+            report = sohbetler_mod.tara(vault, gun=args.gun, state=state)
+            if args.as_json:
+                print(json.dumps(report, ensure_ascii=True, indent=2))
+            else:
+                if hasattr(sys.stdout, "reconfigure"):
+                    sys.stdout.reconfigure(errors="replace")
+                print(sohbetler_mod.markdown_ozet(report), end="")
             return 0
         elif args.command == "sync":
             result = sync.sync()
