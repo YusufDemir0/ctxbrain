@@ -178,6 +178,35 @@ def _table_columns(conn, table):
     return {row[1] for row in rows}
 
 
+def _orkestrator_is_kimlikleri():
+    """Dış orkestratörün (ör. pasla) açtığı işçi oturumlarının kimlikleri.
+
+    pasla her işi `<PASLA_STATE>/jobs/<id>.json` olarak kaydeder; Codex işinde arka uç oturumu
+    ayrıca `thread` alanındadır. Çalışma kopyası olmadan açılan işçiler başka bir izle ayırt
+    edilemediği için bu liste olmadan kullanıcı oturumu sayılırdı. `BEYIN_ISCI_KAYITLARI`
+    başka bir klasör gösterebilir; klasör yoksa boş küme.
+    """
+    ham = os.environ.get("BEYIN_ISCI_KAYITLARI") or os.environ.get("PASLA_STATE")
+    klasor = Path(ham).expanduser() / "jobs" if ham and not os.environ.get("BEYIN_ISCI_KAYITLARI") else (
+        Path(ham).expanduser() if ham else Path.home() / ".local" / "state" / "pasla" / "jobs")
+    kimlikler = set()
+    try:
+        dosyalar = list(klasor.glob("*.json")) if klasor.is_dir() else []
+    except OSError:
+        return kimlikler
+    for dosya in dosyalar:
+        try:
+            meta = json.loads(dosya.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(meta, dict):
+            for alan in ("id", "thread"):
+                deger = meta.get(alan)
+                if isinstance(deger, str) and deger:
+                    kimlikler.add(deger)
+    return kimlikler
+
+
 def _no_memory_ids(state):
     if not state:
         return set()
@@ -984,7 +1013,10 @@ def tara(
 
     companion, prefixes8, haystack = _vault_card_index(vault_path)
     all_rows = claude_rows + codex_rows + ag_rows
+    isci_kimlikleri = no_mem | _orkestrator_is_kimlikleri()
     for rec in all_rows:
+        if rec["tur"] == "kullanici" and rec["oturum_id"] in isci_kimlikleri:
+            rec["tur"] = "isci"
         matched = _is_registered(rec["oturum_id"], prefixes8, haystack)
         rec["kayitli"] = matched
         rec["kayitsiz"] = (rec["tur"] == "kullanici") and not matched

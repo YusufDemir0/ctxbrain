@@ -417,6 +417,19 @@ class SohbetlerTest(unittest.TestCase):
         self.assertEqual(by_id["respitem-1111-2222-3333-444444444444"]["ilk_kullanici_mesaji"], "Response item sorusu")
         self.assertEqual(by_id["respitem-1111-2222-3333-444444444444"]["son_ajan_mesaji"], "Response item yanıtı")
 
+    def test_orchestrator_job_ids_mark_worker_sessions(self):
+        with tempfile.TemporaryDirectory() as d:
+            jobs = Path(d) / "jobs"
+            jobs.mkdir()
+            (jobs / "cx-1.json").write_text(json.dumps({"id": "cx-1", "thread": "th-abc"}), encoding="utf-8")
+            (jobs / "ag.json").write_text(json.dumps({"id": "conv-xyz"}), encoding="utf-8")
+            (jobs / "bozuk.json").write_text("{", encoding="utf-8")
+            with patch.dict(os.environ, {"BEYIN_ISCI_KAYITLARI": str(jobs)}):
+                kimlikler = sohbetler._orkestrator_is_kimlikleri()
+            self.assertEqual(kimlikler, {"cx-1", "th-abc", "conv-xyz"})
+            with patch.dict(os.environ, {"BEYIN_ISCI_KAYITLARI": str(Path(d) / "yok")}):
+                self.assertEqual(sohbetler._orkestrator_is_kimlikleri(), set())
+
     def test_custom_companion_folder_and_env_overrides(self):
         custom_vault = self.root / "custom_vault"
         partner = custom_vault / "Benim Ortağım"
