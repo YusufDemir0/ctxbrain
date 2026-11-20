@@ -274,11 +274,11 @@ def edited_paths(payload):
     tool_input = payload.get('tool_input')
     if not isinstance(tool_input, dict):
         return []
-    found = [value for value in (tool_input.get('file_path'), tool_input.get('path'))
-             if isinstance(value, str) and value.strip()]
-    command = tool_input.get('command')
-    if isinstance(command, str) and '*** Begin Patch' in command:
-        found += PATCH_PATHS.findall(command)
+    found = [value for key in ('file_path', 'path', 'filePath', 'TargetFile')
+             if isinstance(value := tool_input.get(key), str) and value.strip()]
+    for command in (tool_input.get('command'), tool_input.get('patchText')):
+        if isinstance(command, str) and '*** Begin Patch' in command:
+            found += PATCH_PATHS.findall(command)
     cwd = payload.get('cwd')
     base = Path(cwd) if isinstance(cwd, str) and cwd.strip() and Path(cwd).is_absolute() else None
     paths = []

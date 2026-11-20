@@ -32,7 +32,7 @@ değil, kurumsal dolgu yok. Kullanıcı: {{USER_NAME}}. Bağlam: {{USER_BIO}}
 V3'te aktif ajan kaynak bağlantılı receipt gönderir; worker bunu `daily/v3/` ve
 `knowledge/v3/outcomes.md` dizinlerine yansıtır. Kalıcı kavram ve bağlantıları ajan
 beyin skill'iyle damıtır. İlişkisel katman da ajanın sorumluluğundadır: anlamlı bir oturum bitmeden
-kendi kartını `python3 beyin.py oturum yaz --session <Receipt session> --etiket <etiket> --proje <proje>`
+kendi kartını `python3 beyin.py oturum yaz --session <Receipt session> --harness <istemci> --etiket <etiket> --proje <proje>`
 ile yaz (gövde stdin'den). `🔮 850-Companion/Last-Session.md` bu kartlardan üretilir; elle düzenleme,
 başka oturumların kartına dokunma. `Threads.md` içindeki
 açık konuları yerinde düzelt, önemli bir şey olduysa `Journal.md` dosyasına kısa bir giriş ekle.

@@ -27,7 +27,7 @@ de aynı oturumdaki ikinci güncelleme yeni kayıt eklemez, mevcut kaydı yerind
 
 - Oturum kartı: her oturum yalnız kendi kartını yazar, Last-Session.md bu kartlardan üretilen
   özettir ve elle düzenlenmez. Kartı
-  `python3 beyin.py oturum yaz --session <Receipt session> --etiket <etiket> --proje <proje>`
+  `python3 beyin.py oturum yaz --session <Receipt session> --harness <istemci> --etiket <etiket> --proje <proje>`
   ile yaz; gövde stdin'den (ya da `--dosya`) gelir, başlığı komut ekler. Aynı oturum ve etiketle
   tekrar yazınca kendi kartın yerinde güncellenir; paralel oturumlar ve iki makinenin git
   birleştirmesi birbirini ezmez; başka oturumların kartına dokunma. Kartta kısa maddelerle: ne yaptık, neden o kararı verdik, ne
@@ -119,7 +119,7 @@ Kullanıcının seçtiği klasörü ve mevcut dosyaları koru. **Yeni görev iç
 
 Başarılı çıkışa ek olarak dönen `id`, `kind`, `revision`, `status`, `owner` ve `source` alanlarını istekle karşılaştır. Yalnız status doğruysa veya dosya oluşmuşsa tamam sayma. Aynı ID veya dosya zaten varsa üzerine yazma.
 
-Yeni `notes/` veya `knowledge/` kaydı için `python3 beyin.py note-create --file NOTE_JSON` mevcut dosyanın üzerine yazmayı reddeden güvenli giriş yoludur:
+Yeni `notes/` veya `knowledge/` kaydı için `python3 beyin.py note-create --file NOTE_JSON --harness <istemci> --session <Receipt session>` mevcut dosyanın üzerine yazmayı reddeden güvenli giriş yoludur:
 
 ```json
 {"source":"knowledge/ornek-karar.md","text":"Kalıcı karar ve dayandığı kaynak bağlantıları.","metadata":{"kind":"fact","project":"proje-adi","visibility":"internal"}}
@@ -143,7 +143,7 @@ Kaynak yazıldıktan sonra `python3 beyin.py sync` çalıştır. Görev değişi
 
 Anlamlı çalışma bittiğinde, kullanıcı hafızaya yazılmamasını istemediyse kısa bir kaynak bağlantılı sonuç kaydı gönder. İşin gerçek sonucunu ve varsa açık kalan adımı yaz; planı tamamlanmış sonuç gibi kaydetme. Yalnız kalıcı öğrenimler varsa bunları kullanıcının knowledge düzeninde kaynak bağlantılı Markdown olarak damıt. Her konuşmadan zorla öğrenim çıkarma; reasoning, ham araç logları veya bütün transkriptleri notlara kopyalama.
 
-`python3 beyin.py receipt --file RECEIPT_JSON --harness codex` komutunu çalıştır; mevcut istemciye göre `claude`, `antigravity`, `hermes`, `opencode` veya `omp` seç. Şema:
+`python3 beyin.py receipt --file RECEIPT_JSON --harness codex` komutunu çalıştır; mevcut istemciye göre `claude`, `antigravity`, `hermes`, `opencode`, `omp` veya `pasla` seç. Model biliniyorsa `--model <model>` ekle. Şema:
 
 ```json
 {"event_id":"bu-sonuca-ozel-kararli-id","summary":"Yapılan iş, doğrulama ve açık kalan adım.\nÖğrenilen: yok","refs":["notes/kaynak.md"]}

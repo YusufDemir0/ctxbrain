@@ -21,9 +21,11 @@ def build(output, version='3.0.0'):
     if not re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', version):
         raise ValueError('stable version required')
     paths = [ROOT / 'scripts' / name for name in ('install_v3.py', 'beyin_v3.py', 'beyin_entry.py')]
-    paths += sorted((ROOT / 'template/.claude/scripts').glob('beyin_v3*.py'))
     paths += [ROOT / 'template/.agents/skills' / name / 'SKILL.md' for name in ('beyin', 'beyin-doktor', 'beyin-guncelle')]
     files = {p.relative_to(ROOT).as_posix(): p.read_bytes() for p in paths}
+    install = installer()
+    files.update({'template/.claude/scripts/' + name: path.read_bytes()
+                  for name, path in install.runtime_sources().items()})
     manifest = {'schema': 1, 'version': version, 'min_python': '3.11', 'runtime_schema': 1, 'migrations': [], 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
     legacy = [ROOT/'template/.claude/scripts'/name for name in ('flush.py','compile.py')] + [ROOT/'template/.claude/hooks'/(name+suffix) for name in ('session-start','session-end','pre-compact','prompt-counter') for suffix in ('.sh','.ps1')]
     manifest['legacy_hashes'] = {p.relative_to(ROOT/'template').as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in legacy if p.exists()}
@@ -31,7 +33,7 @@ def build(output, version='3.0.0'):
     # installer. Keep this schema-1 wire field compatible; the checksum-listed
     # installer also knows the released starter hashes for all six skill paths.
     doctor = '.claude/skills/beyin-doktor/SKILL.md'
-    manifest['legacy_skill_hashes'] = {doctor: installer().default_skill_hashes()[doctor]}
+    manifest['legacy_skill_hashes'] = {doctor: install.default_skill_hashes()[doctor]}
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:

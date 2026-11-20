@@ -15,7 +15,7 @@ import uuid
 EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "StopFailure", "PreCompact", "SessionEnd"}
 # Devir kartı (beyin_v3_devir): limit/kesinti iş ortasında gelse de başka bir istemci kaldığı yerden devam edebilsin.
 DEVIR_EVENTS = {"UserPromptSubmit", "PostToolUse", "Stop", "StopFailure", "PreCompact", "SessionEnd"}
-EDIT_TOOL = re.compile(r"Edit|Write|apply_patch")
+EDIT_TOOL = re.compile(r"edit|write|patch|replace", re.IGNORECASE)
 HOOK_BUDGET = 3.8  # seconds; installed POSIX hooks are killed at 5
 RECEIPT_REMINDER = (
     "Files were edited in this session but no receipt was written after the edits. If the work is done, write one now: "
@@ -404,7 +404,7 @@ def _main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vault", required=True, type=Path)
     parser.add_argument("--state", required=True, type=Path)
-    parser.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), required=True)
+    parser.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp", "pasla"), required=True)
     parser.add_argument("--event")
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--drain-queue", action="store_true")
@@ -442,10 +442,25 @@ def _main():
             elif event == "Stop" and payload.get("fullyIdle") is not True:
                 print('{"decision":"stop"}')
                 return
-            payload["session_id"] = payload.get("conversationId", "unknown")
+            payload["session_id"] = payload.get("conversationId") or payload.get("session_id", "unknown")
         payload["hook_event_name"] = event
         if event not in EVENTS or os.environ.get("BEYIN_V3_INTERNAL") or os.environ.get("BEYIN_V3_SKIP") == "1" or payload.get('no_memory') is True \
                 or no_memory_session(state, payload.get('session_id')):
+            print("{}")
+            return
+        if args.harness == 'antigravity' and event == 'PostToolUse' and (
+                args.event == 'PostToolUse' or 'toolCall' in payload):
+            tool = payload.get('toolCall')
+            if isinstance(tool, dict) and not payload.get('error') and not args.metadata_only:
+                try:
+                    from beyin_v3_origin import tag_edited_notes
+                    workspaces = payload.get('workspacePaths')
+                    cwd = workspaces[0] if isinstance(workspaces, list) and len(workspaces) == 1 else None
+                    if EDIT_TOOL.search(str(tool.get('name', ''))):
+                        tag_edited_notes(vault, args.harness, dict(payload, tool_input=tool.get('args'),
+                                                                   model=payload.get('modelName'), cwd=cwd))
+                except Exception:
+                    pass
             print("{}")
             return
         if event in DEVIR_EVENTS and not args.metadata_only:
@@ -466,6 +481,12 @@ def _main():
         if event == "StopFailure" or (event == "PostToolUse" and not EDIT_TOOL.search(str(payload.get("tool_name") or "Edit"))):
             print("{}")
             return
+        if event == 'PostToolUse' and not args.metadata_only:
+            try:
+                from beyin_v3_origin import tag_edited_notes
+                tag_edited_notes(vault, args.harness, payload)
+            except Exception:
+                pass  # Metadata tagging must never cost the turn.
         if event == 'UserPromptSubmit' and not args.metadata_only and not is_synthetic_prompt(payload):
             reply = ctx_command(vault, state, args.harness, payload)
             if reply is not None:
@@ -474,6 +495,13 @@ def _main():
         if event == 'SessionStart' and not args.metadata_only:
             from beyin_v3_releases import session_start
             notice = session_start(vault, state)
+            try:
+                from beyin_v3_vault import branch_status
+                warning = branch_status(vault).get('warning')
+                if warning:
+                    notice = warning + '\n' + notice
+            except Exception:
+                pass
         if (not args.metadata_only and event in ('SessionStart', 'UserPromptSubmit')
                 and not (event == 'UserPromptSubmit' and is_synthetic_prompt(payload))):
             try:
@@ -584,7 +612,8 @@ def _main():
             query = prompt_text(payload)
             project = payload.get('project')
             project = project if isinstance(project, str) and project.strip() else None
-            session = hashlib.sha256(str(payload.get('session_id', 'unknown')).encode()).hexdigest()[:24]
+            from beyin_v3_origin import receipt_session
+            session = receipt_session(payload.get('session_id', 'unknown'))
             warning = ''
             health = state / "hook-health.json"
             if health.exists():

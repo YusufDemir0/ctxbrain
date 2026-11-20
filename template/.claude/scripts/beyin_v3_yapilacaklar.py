@@ -12,6 +12,9 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 
+from beyin_v3_sync import atomic
+from beyin_v3_vault import file_lock
+
 NAME = "Yapılacaklar.md"
 ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 PENDING = "## Yapılacak işler"
@@ -38,11 +41,12 @@ def _file(vault):
 
 def _load(vault, create=False):
     path = _file(vault)
-    if not path.exists():
-        if not create:
-            return None, 0, 0
-        path.write_text(STARTER, encoding="utf-8")
-    lines = path.read_text(encoding="utf-8").splitlines()
+    if path.exists():
+        lines = path.read_text(encoding="utf-8").splitlines()
+    elif create:
+        lines = STARTER.splitlines()
+    else:
+        return None, 0, 0
     try:
         start, end = lines.index(PENDING), lines.index(DONE)
     except ValueError:
@@ -73,12 +77,17 @@ def _save(vault, lines):
             tidy.append("")
         if line.strip() or (tidy and tidy[-1].strip()):
             tidy.append(line)
-    _file(vault).write_text("\n".join(tidy).rstrip("\n") + "\n", encoding="utf-8")
+    atomic(_file(vault), "\n".join(tidy).rstrip("\n") + "\n")
 
 
 def ekle(vault, metin, proje="genel", not_=None):
     if not _one_line(metin):
         raise ValueError("iş metni boş")
+    with file_lock(vault, _file(vault)):
+        return _ekle(vault, metin, proje, not_)
+
+
+def _ekle(vault, metin, proje, not_):
     lines, start, end = _load(vault, create=True)
     stamp = _now()
     # A random suffix keeps ids unique when two machines record on the same day and git merges them.
@@ -108,6 +117,11 @@ def bekleyenler(vault):
 def uygulandi(vault, item_id, sonuc):
     if not _one_line(sonuc):
         raise ValueError("--sonuc boş olamaz")
+    with file_lock(vault, _file(vault)):
+        _uygulandi(vault, item_id, sonuc)
+
+
+def _uygulandi(vault, item_id, sonuc):
     lines, start, end = _load(vault)
     match = next((b for b in _blocks(lines, start, end) if b[0] == item_id), None) if lines else None
     if match is None:

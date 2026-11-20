@@ -7,16 +7,13 @@ private monthly archive beside the companion files, until the file fits. The new
 of every container (the handoff, each thread) always stays. Every line either stays or
 moves; nothing is rewritten, summarized or dropped.
 """
-from contextlib import contextmanager
+from contextlib import ExitStack
 from datetime import datetime, timezone
-import hashlib
-import os
 from pathlib import Path
 import re
-import tempfile
-import time
 
 from beyin_v3_companion import LIMITS, directory, read_limits
+from beyin_v3_vault import file_lock
 
 LINE = re.compile(r'[^\n]*\n|[^\n]+$')
 HEADING = re.compile(r'(#{1,6})[ \t]')
@@ -234,68 +231,6 @@ def _inside(path, vault):
         raise ValueError('companion archive escapes vault')
 
 
-@contextmanager
-def _compact_lock(vault, state, timeout=10.0, step=0.1):
-    vault_path = Path(vault).resolve()
-    key = hashlib.sha256(str(vault_path).encode('utf-8')).hexdigest()[:16]
-    handle = None
-    candidates = [
-        Path(tempfile.gettempdir()) / f'beyin-compact-{key}.lock',
-        Path(state) / 'compact.lock',
-    ]
-    for candidate in candidates:
-        try:
-            candidate.parent.mkdir(parents=True, exist_ok=True)
-            candidate.touch(exist_ok=True)
-            handle = candidate.open('a+b')
-            break
-        except OSError:
-            continue
-    if handle is None:
-        yield
-        return
-
-    deadline = time.monotonic() + timeout
-    acquired = False
-    try:
-        while True:
-            try:
-                if os.name == 'nt':
-                    import msvcrt
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                    acquired = True
-                    break
-                else:
-                    import fcntl
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
-                    break
-            except (OSError, BlockingIOError):
-                if time.monotonic() >= deadline:
-                    break
-                time.sleep(step)
-        if not acquired:
-            raise TimeoutError('vault compaction lock busy; wait for completion')
-        yield
-    finally:
-        if acquired:
-            try:
-                if os.name == 'nt':
-                    import msvcrt
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
-        try:
-            handle.close()
-        except OSError:
-            pass
-
-
 def compact(vault, state, dry_run=False, now=None):
     vault = Path(vault).resolve()
     target = directory(vault)
@@ -309,11 +244,13 @@ def compact(vault, state, dry_run=False, now=None):
                 'reason': 'companion-limits.json in the runtime state is invalid; nothing moved. Fix or remove it first.'}
     if dry_run:
         return _compact_files(vault, target, configured, dry_run=True, now=now)
-    try:
-        with _compact_lock(vault, state):
-            return _compact_files(vault, target, configured, dry_run=False, now=now)
-    except TimeoutError as exc:
-        return {'status': 'conflict', 'reason': str(exc), 'files': {}}
+    now = now or datetime.now(timezone.utc)
+    with ExitStack() as locks:
+        for name in LIMITS:
+            path = target / name
+            if not path.is_symlink():
+                locks.enter_context(file_lock(vault, path))
+        return _compact_files(vault, target, configured, dry_run=False, now=now)
 
 
 def _compact_files(vault, target, configured, dry_run=False, now=None):

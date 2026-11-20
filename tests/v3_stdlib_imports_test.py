@@ -28,10 +28,10 @@ def imported(path):
             yield node.lineno, node.module.split('.')[0]
 
 
-# A local import must name a module the release actually ships. Helpers such as
-# _portalock.py live next to the V3 modules in the source tree but are not packaged,
-# so importing one would pass every source-tree test and fail in an installed vault (#151).
-LOCAL = {path.stem for path in PACKAGED}
+# The release ships the source-tree lock primitive under a V3 runtime name.
+PORTALOCK = ROOT / 'template/.claude/scripts/_portalock.py'
+LOCK_ALIAS = PORTALOCK.with_name('beyin_v3_portalock.py')
+LOCAL = {path.stem for path in PACKAGED + [PORTALOCK, LOCK_ALIAS]}
 
 
 def allowed(name):
@@ -42,7 +42,7 @@ class StdlibImportTest(unittest.TestCase):
     def test_packaged_runtime_has_no_third_party_import(self):
         self.assertGreater(len(PACKAGED), 20)
         offenders = [f'{path.relative_to(ROOT).as_posix()}:{line} {name}'
-                     for path in PACKAGED for line, name in imported(path) if not allowed(name)]
+                     for path in PACKAGED + [PORTALOCK] for line, name in imported(path) if not allowed(name)]
         self.assertEqual(offenders, [])
 
     def test_the_guard_rejects_model_runtimes(self):
@@ -50,7 +50,7 @@ class StdlibImportTest(unittest.TestCase):
             self.assertFalse(allowed(name), name)
 
     def test_the_guard_rejects_unpackaged_local_helpers(self):
-        for name in ('_portalock', 'flush', 'compile', 'antigravity_hooks', 'beyin_helper'):
+        for name in ('flush', 'compile', 'antigravity_hooks', 'beyin_helper'):
             self.assertFalse(allowed(name), name)
 
     def test_packaged_list_matches_the_builder_and_the_updater_allowlist(self):
@@ -63,8 +63,9 @@ class StdlibImportTest(unittest.TestCase):
             builder.build(archive, '3.0.0')
             with zipfile.ZipFile(archive) as release:
                 names = [name for name in release.namelist() if name != 'manifest.json']
+                self.assertEqual(release.read(LOCK_ALIAS.relative_to(ROOT).as_posix()), PORTALOCK.read_bytes())
         shipped = sorted(ROOT / name for name in names if name.endswith('.py'))
-        self.assertEqual(shipped, PACKAGED)
+        self.assertEqual(shipped, sorted(PACKAGED + [LOCK_ALIAS]))
         self.assertEqual([name for name in names if not updater.allowed(name)], [])
 
 
