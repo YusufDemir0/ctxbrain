@@ -389,16 +389,18 @@ def human_result(result, command, installed_version=None):
 
 
 def main(argv=None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    human = ('--human' in argv or sys.stdout.isatty()) and '--json' not in argv
-    argv = [arg for arg in argv if arg not in ('--human', '--json')]
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    has_json = '--json' in raw_argv
+    human = ('--human' in raw_argv or sys.stdout.isatty()) and not has_json
+    stripped = [arg for arg in raw_argv if arg not in ('--human', '--json')]
+    command = stripped[0] if stripped else 'doctor'
+    argv = [arg for arg in raw_argv if arg != '--human'] if command == 'sohbetler' else stripped
     if human:
         # A piped or redirected Windows console uses a legacy code page (cp1252 has no s-cedilla);
         # an unencodable character must print as '?' instead of failing the whole command.
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, 'reconfigure'):
                 stream.reconfigure(errors='replace')
-    command = argv[0] if argv else 'doctor'
     vault = Path(__file__).resolve().parent
     stamp = vault / '.beyin-version'
     installed_version = None
@@ -450,7 +452,7 @@ def main(argv=None):
             result = json.loads(value)
             message = human_result(result, command, installed_version)
         except (ValueError, TypeError, AttributeError):
-            message = 'Islem tamamlanamadi; ayrinti icin ayni komutu --json ile calistir.' if code else value.strip()
+            message = 'Islem tamamlanamadi; ayrinti icin ayni komutu --json ile calistir.' if code else (value.rstrip('\n') if command == 'sohbetler' else value.strip())
         print(message, file=sys.stderr if code else sys.stdout)
         return code
     except Exception as exc:
