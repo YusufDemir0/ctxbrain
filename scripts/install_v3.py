@@ -18,6 +18,16 @@ import zipfile
 sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def runtime_sources():
+    directory = ROOT / "template/.claude/scripts"
+    sources = {path.name: path for path in sorted(directory.glob("beyin_v3*.py"))}
+    # The V3 alias fits previously released updater allowlists and leaves legacy copies alone.
+    sources.setdefault("beyin_v3_portalock.py", directory / "_portalock.py")
+    return sources
+
+
 START, END = "<!-- beyin-v3:start -->", "<!-- beyin-v3:end -->"
 # By default Claude Code skips AGENTS.md whenever a CLAUDE.md exists; an import keeps it loaded once (#84).
 AGENTS_IMPORT = re.compile(r"(?m)^@(?:\./)?AGENTS\.md\s*$")
@@ -308,8 +318,8 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
             stub = RETIRED_STUB + (b'raise SystemExit(0)\n' if name.endswith('.py') else b'exit 0\n')
             if name.endswith('.sh'): stub = b'#!/bin/sh\n' + stub
             add(name, stub)
-    for source in sorted((ROOT / "template/.claude/scripts").glob("beyin_v3*.py")):
-        add(".claude/scripts/" + source.name, source.read_bytes())
+    for name, source in runtime_sources().items():
+        add(".claude/scripts/" + name, source.read_bytes())
     add("beyin.py", (ROOT / "scripts/beyin_entry.py").read_bytes())
     add(".beyin-runtime.json", jbytes({"state": str(state), "schema": 1}))
     add(".beyin-version", (version + "\n").encode())
@@ -398,6 +408,11 @@ def _install(vault, state, uninstall=False, plan_only=False, version="3.0.0", le
         for event in ("PreInvocation", "Stop"):
             posix, windows = commands([sys.executable, hook, "--vault", vault, "--state", state, "--harness", "antigravity", "--event", event])
             managed[event] = [{"type": "command", "command": windows if os.name == "nt" else posix, "timeout": 20 if os.name == "nt" else 5}]
+        posix, windows = commands([sys.executable, hook, "--vault", vault, "--state", state,
+                                    "--harness", "antigravity", "--event", "PostToolUse"])
+        managed["PostToolUse"] = [{"matcher": ".*(edit|write|patch|replace).*", "hooks": [
+            {"type": "command", "command": windows if os.name == "nt" else posix,
+             "timeout": 20 if os.name == "nt" else 5}]}]
         data["beyin-v3"] = managed
         add(".agents/hooks.json", jbytes(data))
     cfg = vault / ".codex/config.toml"
@@ -433,7 +448,7 @@ cevapları Core.md'ye kaydet. Mevcut kimliği tekrar sorgulama veya şablonla de
 
 Anlamlı bir iş parçası bittiğinde (her cevapta değil) beyin skill'indeki ilişki ve öğrenme
 protokolünü uygula: oturumun kendi kartını
-`python3 beyin.py oturum yaz --session <Receipt session> --etiket <etiket> --proje <proje>`
+`python3 beyin.py oturum yaz --session <Receipt session> --harness <istemci> --etiket <etiket> --proje <proje>`
 ile yaz (gövde stdin'den; aynı oturum+etiket tekrar yazılırsa kendi kartı güncellenir).
 Last-Session.md bu kartlardan üretilen özettir, elle düzenleme; başka oturumların kartına
 dokunma. Last-Session.md'nin başında `Yarım kalan işler (devir)` varsa başka bir istemcinin işi limit ya da

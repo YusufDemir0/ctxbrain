@@ -151,7 +151,8 @@ export default function (pi) {
   pi.on("tool_result", async (event, ctx) => {
     if (!WRITE_TOOLS.has(String(event?.toolName ?? ""))) return
     const session = inVaultOf(ctx)
-    if (session) await send(state, "PostToolUse", { session_id: session })
+    if (session && !event?.isError) await send(state, "PostToolUse", { session_id: session,
+      tool_name: event?.toolName, tool_input: event?.input, cwd: ctx?.cwd, model: ctx?.model?.id })
   })
 
   pi.on("session_stop", async (_event, ctx) => {

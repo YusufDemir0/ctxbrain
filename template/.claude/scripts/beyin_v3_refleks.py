@@ -14,13 +14,14 @@ files; the vault holds only what the user could also edit by hand. No model, no 
 """
 import hashlib
 import json
-import os
 import re
-import tempfile
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from beyin_v3_companion import directory
+from beyin_v3_sync import atomic as _atomic
+from beyin_v3_vault import branch_status, file_lock
 
 FOLDER = 'Refleksler'
 DICTIONARY = '_sozluk.md'
@@ -80,14 +81,6 @@ def folder(vault):
     if target is None:
         raise ValueError('Birden çok companion klasörü var; hangisinin kullanılacağı belirsiz')
     return target / FOLDER
-
-
-def _atomic(path, text):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix='.refleks-', dir=path.parent)
-    with os.fdopen(fd, 'w', encoding='utf-8') as out:
-        out.write(text)
-    os.replace(tmp, path)
 
 
 def _list(value):
@@ -179,7 +172,19 @@ def dictionary(vault):
     return {key: sorted({key, key.replace('-', ' '), *aliases}, key=len, reverse=True) for key, aliases in result.items()}
 
 
-def write_dictionary(vault, entries):
+def write_dictionary(vault, entries=None):
+    path = folder(vault) / DICTIONARY
+    with file_lock(vault, path):
+        if path.exists():
+            return False
+        if entries is None:
+            entries = {key: [alias for alias in aliases if alias not in (key, key.replace('-', ' '))]
+                       for key, aliases in dictionary(vault).items()}
+        _write_dictionary(path, entries)
+        return True
+
+
+def _write_dictionary(path, entries):
     lines = ['---', 'kind: reflex-dictionary', 'visibility: private', '---',
              '# Proje sözlüğü',
              '',
@@ -187,7 +192,7 @@ def write_dictionary(vault, entries):
              'biri istemde geçince veya oturumda klasörüne dokunulunca etkinleşir. Takma ad ekleyebilirsin.',
              '']
     lines += [f"- {key}: {', '.join(aliases)}" for key, aliases in sorted(entries.items())]
-    _atomic(folder(vault) / DICTIONARY, '\n'.join(lines) + '\n')
+    _atomic(path, '\n'.join(lines) + '\n')
 
 
 def _alias_hit(alias, tokens, folded):
@@ -546,33 +551,40 @@ def ekle(vault, metin, kapsam=(), tur='duzeltme', refleks_id=None, tetik=(), tar
     scopes = _check_scopes(vault, kapsam)
     if refleks_id:
         path = folder(vault) / (refleks_id + '.md')
-        if not path.is_file():
-            raise ValueError(f'{refleks_id} adlı refleks yok')
-        reflex = parse(path.read_text(encoding='utf-8'), path)
-        reflex['kanit'].append({'date': when, 'type': kind, 'text': metin})
-        _atomic(path, render(reflex))
+        with file_lock(vault, path):
+            if not path.is_file():
+                raise ValueError(f'{refleks_id} adlı refleks yok')
+            reflex = parse(path.read_text(encoding='utf-8'), path)
+            reflex['kanit'].append({'date': when, 'type': kind, 'text': metin})
+            _atomic(path, render(reflex))
         return {'status': 'kanit_eklendi', 'id': reflex['id'], 'similar': []}
     similar = find_similar(vault, metin, scopes)
     if similar and not yeni:
         return {'status': 'benzer_var', 'id': None,
                 'similar': [{'id': r['id'], 'benzerlik': round(s, 2), 'metin': r['metin']} for s, r in similar]}
     base = slug(((scopes[0] + ' ') if scopes else '') + metin)
+    target = folder(vault)
     rid, n = base, 2
-    while (folder(vault) / (rid + '.md')).exists():
+    while True:
+        path = target / (rid + '.md')
+        if not path.exists():
+            with file_lock(vault, path):
+                if not path.exists():
+                    reflex = {'id': rid, 'durum': 'aktif', 'kapsam': scopes, 'tetik': [t for t in tetik if t.strip()],
+                              'metin': metin, 'kanit': [{'date': when, 'type': kind, 'text': metin}]}
+                    _atomic(path, render(reflex))
+                    return {'status': 'olusturuldu', 'id': rid, 'similar': []}
         rid, n = f'{base}-{n}', n + 1
-    reflex = {'id': rid, 'durum': 'aktif', 'kapsam': scopes, 'tetik': [t for t in tetik if t.strip()],
-              'metin': metin, 'kanit': [{'date': when, 'type': kind, 'text': metin}]}
-    _atomic(folder(vault) / (rid + '.md'), render(reflex))
-    return {'status': 'olusturuldu', 'id': rid, 'similar': []}
 
 
 def set_core(vault, refleks_id, core=True):
     path = folder(vault) / (refleks_id + '.md')
-    if not path.is_file():
-        raise ValueError(f'{refleks_id} adlı refleks yok')
-    reflex = parse(path.read_text(encoding='utf-8'), path)
-    reflex['durum'] = 'cekirdek' if core else 'aktif'
-    _atomic(path, render(reflex))
+    with file_lock(vault, path):
+        if not path.is_file():
+            raise ValueError(f'{refleks_id} adlı refleks yok')
+        reflex = parse(path.read_text(encoding='utf-8'), path)
+        reflex['durum'] = 'cekirdek' if core else 'aktif'
+        _atomic(path, render(reflex))
     return reflex['durum']
 
 
@@ -638,6 +650,14 @@ def plan_migration(vault):
 
 
 def migrate(vault, apply=False, today=None):
+    target = directory(vault)
+    source = target / 'Kurallar.md' if target is not None else None
+    lock = file_lock(vault, source) if apply and source is not None and source.is_file() else nullcontext()
+    with lock:
+        return _migrate(vault, apply, today)
+
+
+def _migrate(vault, apply, today):
     plan = plan_migration(vault)
     summary = {'tasinacak': len(plan['move']), 'kalan': plan['keep'],
                'kapsamlar': {}, 'uygulandi': False}
@@ -652,8 +672,9 @@ def migrate(vault, apply=False, today=None):
     original = source.read_text(encoding='utf-8')
     today = today or date.today()
     archive = source.parent / 'Arşiv' / f'Kurallar-{today.isoformat()}-goc-oncesi.md'
-    if not archive.exists():
-        _atomic(archive, '---\nvisibility: private\n---\n' + original)
+    with file_lock(vault, archive):
+        if not archive.exists():
+            _atomic(archive, '---\nvisibility: private\n---\n' + original)
     created = []
     for item in plan['move']:
         label = re.sub(r'\s*\([^)]*\)\s*$', '', item['label']).strip()
@@ -881,6 +902,7 @@ def absorb(vault, state, session, found, today=None):
         raw_queue = _read_json(queue_path, [])
         queue = [q for q in raw_queue if not _expired_suggestion(q, today)]
         pruned = len(queue) != len(raw_queue)
+        allowed = None
         for kind, sentence in found:
             if kind not in ('kural', 'karar'):
                 continue
@@ -889,10 +911,20 @@ def absorb(vault, state, session, found, today=None):
             best = max(((_match(sentence, r), r) for r in pool), key=lambda item: item[0], default=None)
             (score, shared), reflex = best if best else ((0.0, 0), None)
             if reflex and score >= STRONG[0] and shared >= STRONG[1]:
-                if all(e['text'] != sentence for e in reflex['kanit']):
-                    reflex['kanit'].append({'date': today.isoformat(), 'type': 'tekrar', 'text': sentence + ' (yakalandı)'})
-                    _atomic(reflex['path'], render(reflex))
-                    result['kanit'].append(reflex['id'])
+                if allowed is None:
+                    allowed = not branch_status(vault).get('warning')
+                if allowed:
+                    path = reflex['path']
+                    try:
+                        with file_lock(vault, path, timeout=0):
+                            current = parse(path.read_text(encoding='utf-8'), path)
+                            evidence = sentence + ' (yakalandı)'
+                            if all(e['text'] not in (sentence, evidence) for e in current['kanit']):
+                                current['kanit'].append({'date': today.isoformat(), 'type': 'tekrar', 'text': evidence})
+                                _atomic(path, render(current))
+                                result['kanit'].append(current['id'])
+                    except (OSError, ValueError):
+                        pass
                 continue
             if reflex and score >= LIKELY[0] and shared >= LIKELY[1]:
                 item = {'tur': 'olasi_tekrar', 'refleks': reflex['id'],

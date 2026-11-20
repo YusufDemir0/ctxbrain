@@ -169,6 +169,8 @@ def human_result(result, command, installed_version=None):
                  'Sir suzgeci: ' + ('acik' if prefs['secret_filter'] else 'kapali'),
                  'Surum bildirimi: ' + ('acik' if result.get('update_notifications', {}).get('effective') else 'kapali'),
                  'Proje oturum basi baglami: ' + ('acik' if result.get('project_context') == 'on' else 'kapali')]
+        if prefs.get('beklenen_dal'):
+            lines.append('Beklenen vault dalı ' + prefs['beklenen_dal'])
         opening = (result.get('companion_context') or {}).get('context_chars')
         if opening is not None:
             lines.append('Oturum basi hafiza baglami: ' + (str(opening) + ' karakter' if opening else 'baglam ust siniri kadar'))
@@ -247,6 +249,13 @@ def human_result(result, command, installed_version=None):
                   'pending': 'Bekleyen isler var.', 'needs_attention': 'Kontrol gerektiren bir sorun var.'}
         lines = ['Beyin ' + (installed_version or 'surumu bilinmiyor'), labels.get(status, 'Saglik kontrolu tamamlandi.'),
                  'Bekleyen is: ' + str(result.get('pending_events', 0))]
+        branch = result.get('vault_branch') or {}
+        if branch.get('warning'):
+            lines.append(branch['warning'])
+        elif branch.get('status') == 'match':
+            lines.append('Vault dalı beklentiyle eşleşiyor (' + branch['expected'] + ').')
+        elif branch.get('status') == 'not_git':
+            lines.append('Beklenen dal ' + branch['expected'] + '. Vault bir Git deposu dışında.')
         for name, details in result.get('lifecycle', {}).items():
             lines.append(name + ': ' + ('olay goruldu' if details.get('status') == 'observed_metadata' else 'henuz dogrulanmadi'))
         jev = result.get('jev') or {}

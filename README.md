@@ -165,7 +165,7 @@ ikisi de okunur.
 | `refleks yukselt <id>` / `refleks dusur <id>` | Çekirdeğe al / çekirdekten çıkar |
 | `refleks sozluk [--olustur]` | Proje sözlüğünü göster ya da üret |
 | `refleks gocet [--uygula]` | Tek projeye ait kuralları `Kurallar.md`'den reflekse taşı |
-| `oturum yaz --session <id> --etiket <etiket> --proje <proje>` | Oturum kartını yaz (gövde stdin'den) |
+| `oturum yaz --harness <istemci> --session <id> --etiket <etiket> --proje <proje>` | Oturum kartını yaz (gövde stdin'den) |
 | `oturum liste` / `oturum derle` | Kartları listele / `Last-Session.md`'yi yeniden üret |
 | `devir liste` / `devir goster <sid> [--detay]` / `devir kapat <sid>` | Yarım kalan işler: listele, devral (son turlarla), kapat |
 | `yapilacak ekle "<iş>" --proje <proje>` | İşi sonraya kaydet |
@@ -175,6 +175,10 @@ ikisi de okunur.
 | `preferences [--profile economical\|normal\|manual]` | Otomatik bağlam ve kontrol ayarları |
 | `ctx <liste\|unut\|kaydet\|kapat\|aç>` | Yakalananları terminalden yönet |
 | `update [--check]` / `rollback` | Güncelle / önceki sürüme dön |
+
+Git kullanan vault’larda `beyin.py preferences --beklenen-dal main` paylaşılan dosyalara yazmayı
+bu dala sınırlar. Ayarı boş değerle kaldırabilirsin. Kart, receipt ve `note-create` kayıtlarında
+istemci için `--harness`, oturum için açılıştaki Receipt session ve model biliniyorsa `--model` kullan.
 
 Refleks türleri ve güçleri: `kural` ve `duzeltme` 1,0 · `karar` 0,7 · `tekrar` 0,5 ·
 `gozlem` 0,3 · `ters` −1,0 (reflekse karşı çıkan olay).

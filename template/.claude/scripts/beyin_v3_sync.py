@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import unicodedata
 import tempfile
 import sys
@@ -20,6 +21,7 @@ if _MODULE_DIR not in sys.path:
 from beyin_v3 import HARNESSES, MemoryStore, ReceiptConflict, RevisionConflict, _json
 from beyin_v3_projections import project_receipts
 from beyin_v3_preferences import read as read_preferences
+from beyin_v3_origin import origin_fields
 from beyin_v3_secrets import redact as redact_secrets, record as record_redactions
 
 
@@ -27,7 +29,7 @@ def _hash(data):
     return hashlib.sha256(data if isinstance(data, bytes) else data.encode()).hexdigest()
 
 
-def atomic(path, text):
+def atomic(path, text, *, expected=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix='.beyin-', dir=path.parent)
@@ -36,6 +38,10 @@ def atomic(path, text):
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+        if expected is not None:
+            os.chmod(name, stat.S_IMODE(path.stat().st_mode))
+            if path.is_symlink() or path.read_bytes() != expected:
+                raise OSError('source changed before replace')
         os.replace(name, path)
         try:
             directory = os.open(path.parent, os.O_RDONLY)
@@ -285,7 +291,7 @@ class SyncEngine:
         total_redacted = 0
         protected = dict(metadata)
 
-        for field in ('title', 'next_action', 'completion_criterion'):
+        for field in ('title', 'next_action', 'completion_criterion', 'model'):
             if field in protected and isinstance(protected[field], str):
                 redacted_text, count = redact_secrets(protected[field], self.state)
                 total_redacted += count
@@ -541,6 +547,7 @@ class SyncEngine:
             if not isinstance(session, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', session):
                 raise ValueError('invalid receipt session')
             event['session'] = session
+        event.update(origin_fields(model=metadata.get('model')))
         return event
 
     def _scan_receipts(self, db):
@@ -812,7 +819,7 @@ class SyncEngine:
                     source_sync={'status': result['status'], 'warnings': result['warnings'],
                                  'conflicts': result['conflicts']})
 
-    def receipt(self, event_id, summary, refs, harness, session=None):
+    def receipt(self, event_id, summary, refs, harness, session=None, model=None):
         if not isinstance(event_id, str) or not event_id.strip() or not isinstance(summary, str) or not summary.strip():
             raise ValueError('event id and summary required')
         if harness not in HARNESSES + ('manual',) or not isinstance(refs, list) or not refs:
@@ -820,11 +827,10 @@ class SyncEngine:
         summary, redacted = self._protect(summary)
         refs = [self.store._source(ref) for ref in refs]
         source = 'receipts/' + _hash(event_id) + '.md'
-        event = {'event_id': event_id, 'summary': summary, 'refs': refs, 'harness': harness, 'created_at': datetime.now(timezone.utc).isoformat()}
-        if session is not None:
-            if not isinstance(session, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', session):
-                raise ValueError('invalid receipt session')
-            event['session'] = session
+        fields, meta_redacted = self._protect_metadata(origin_fields(harness, session, model))
+        redacted += meta_redacted
+        event = dict(event_id=event_id, summary=summary, refs=refs,
+                     created_at=datetime.now(timezone.utc).isoformat(), **fields)
         with self.store._connect() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT payload FROM receipts WHERE id=?', (event_id,)).fetchone()
@@ -846,6 +852,8 @@ class SyncEngine:
                 receipt_metadata['created_at'] = event['created_at']
             if event.get('session'):
                 receipt_metadata['session'] = event['session']
+            if event.get('model'):
+                receipt_metadata['model'] = event['model']
             content = render(receipt_metadata, summary + '\n')
             path = self._path(source)
             if path.exists():

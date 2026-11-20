@@ -221,6 +221,14 @@ def read_json(filename: str):
         return json.load(stream)
 
 
+HARNESSES = ("codex", "claude", "antigravity", "hermes", "opencode", "omp", "pasla")
+
+
+def add_origin_options(command, default_harness=None):
+    command.add_argument("--harness", choices=HARNESSES, default=default_harness, help="Client writing this record")
+    command.add_argument("--model", help="Model writing this record, if known")
+
+
 def load_skills():
     load_sync()
     import beyin_v3_skills
@@ -242,6 +250,7 @@ def parser():
     oturum_sub = oturum.add_subparsers(dest="oturum_command", required=True)
     oturum_yaz = oturum_sub.add_parser("yaz", help="Write or update this session's own card (body from stdin or --dosya)")
     oturum_yaz.add_argument("--session", required=True, help="Receipt session id; the first 8 hex characters are used")
+    add_origin_options(oturum_yaz)
     oturum_yaz.add_argument("--etiket", required=True)
     oturum_yaz.add_argument("--proje")
     oturum_yaz.add_argument("--dosya", help="Markdown body file; default stdin")
@@ -297,6 +306,7 @@ def parser():
     settings.add_argument("--companion-context-chars", type=int,
                           help="Opening context budget (SessionStart, continuity questions), 1000..24000; 0 uses --context-chars")
     settings.add_argument("--secret-filter", choices=("on", "off"))
+    settings.add_argument("--beklenen-dal", "--expected-branch", help="Require this Git branch for companion writes; use an empty string to clear")
     settings.add_argument("--capture", choices=("on", "off"),
                           help="Write the user's decision and rule sentences to knowledge/yakalanan/ on every prompt")
     settings.add_argument("--update-notifications", choices=("on", "off"))
@@ -326,12 +336,14 @@ def parser():
     ingest.add_argument("--file", default="-", help="JSON input path, or - for stdin")
     note = sub.add_parser("note-create", help="Create a semantic Markdown source without overwriting")
     note.add_argument("--file", default="-", help="JSON {source, text, metadata}")
+    add_origin_options(note)
+    note.add_argument("--session", help="Receipt session value from the hook context")
     task = sub.add_parser("task-create", help="Create and verify an explicit new task")
     task.add_argument("--file", default="-", help="JSON {source: tasks/name.md, text, metadata: {id,status,owner}}")
     context = sub.add_parser("context", help="Retrieve source-backed shared context")
     context.add_argument("query", nargs="?", help="Query; alternatively use --file")
     context.add_argument("--file", help="JSON retrieval arguments, or - for stdin")
-    context.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), default="codex")
+    context.add_argument("--harness", choices=HARNESSES, default="codex")
     context.add_argument("--project")
     context.add_argument("--audience", choices=("internal", "public"), default="internal")
     context.add_argument("--status", action="append", dest="statuses")
@@ -358,17 +370,27 @@ def parser():
     answer.add_argument("--project", required=True)
     receipt = sub.add_parser("receipt", help="Submit an idempotent source-linked receipt")
     receipt.add_argument("--file", default="-", help="JSON input path, or - for stdin")
-    receipt.add_argument("--harness", choices=("codex", "claude", "antigravity", "hermes", "opencode", "omp"), default="codex")
+    add_origin_options(receipt)
     receipt.add_argument("--event-id", help="Without --file: stable id of this outcome")
     receipt.add_argument("--summary", help="Without --file: what was done, verified and left open")
     receipt.add_argument("--summary-file", help="Without --file: UTF-8 file holding the summary")
     receipt.add_argument("--ref", action="append", default=[], help="Without --file: vault-relative source (repeatable)")
-    receipt.add_argument("--session", help="Without --file: the Receipt session value from the hook context")
+    receipt.add_argument("--session", help="Receipt session value from the hook context")
     update = sub.add_parser("task-update", help="Update task with expected revision")
     update.add_argument("--file", default="-", help="JSON {id, expected_revision, changes}")
     history = sub.add_parser("history", help="Read ordered revision snapshots for a record")
     history.add_argument("record_id")
     return root
+
+
+def writes_companion(args):
+    return ((args.command == 'oturum' and args.oturum_command != 'liste')
+            or (args.command == 'devir' and args.devir_command == 'kapat')
+            or (args.command == 'yapilacak' and args.todo_command != 'liste')
+            or (args.command == 'companion-compact' and not args.dry_run)
+            or (args.command == 'refleks' and (args.refleks_command in ('ekle', 'yukselt', 'dusur')
+                or (args.refleks_command == 'gocet' and args.uygula)
+                or (args.refleks_command == 'sozluk' and args.olustur))))
 
 
 def main(argv=None):
@@ -382,6 +404,10 @@ def main(argv=None):
         state = (args.state.expanduser() if args.state else default_state(vault)).resolve()
         if state == vault or vault in state.parents:
             raise ValueError("--state must be outside the vault")
+        if writes_companion(args):
+            load_sync()
+            from beyin_v3_vault import require_branch
+            require_branch(vault)
         read_only_context = args.command == "context" and args.no_sync
         if read_only_context:
             # The source CLI can run without the installed entry point, which
@@ -422,7 +448,8 @@ def main(argv=None):
                 if not limits_valid:
                     raise ValueError('companion-limits.json in the runtime state is invalid; fix or remove it first')
                 companion.check_limits(dict(current_limits, **limits))
-            changes = {key: getattr(args, key) for key in ('interval_minutes', 'context_mode', 'context_chars') if getattr(args, key) is not None}
+            changes = {key: getattr(args, key) for key in ('interval_minutes', 'context_mode', 'context_chars', 'beklenen_dal')
+                       if getattr(args, key) is not None}
             if args.auto_sync is not None:
                 changes['auto_sync'] = args.auto_sync == 'on'
             if args.secret_filter is not None:
@@ -548,6 +575,8 @@ def main(argv=None):
                 result['exclusions_pending'] = True
             import beyin_v3_preferences as preferences
             result['preferences'] = preferences.read(vault)
+            from beyin_v3_vault import branch_status
+            result['vault_branch'] = branch_status(vault, result['preferences'])
             import beyin_v3_releases as releases
             result['updates'] = releases.status(vault, state)
             from beyin_v3_secrets import health as secret_filter_health
@@ -619,7 +648,7 @@ def main(argv=None):
                 result['parallel_sessions'] = parallel.doctor(state)
             except Exception as exc:
                 result['parallel_sessions'] = {'status': 'unavailable', 'error': type(exc).__name__}
-            result['status'] = ('needs_attention' if health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
+            result['status'] = ('needs_attention' if result['vault_branch'].get('warning') or health.get('sync', {}).get('status') in ('conflict', 'degraded') or result['skill_conflicts'] or result.get('instruction_conflicts') or result['hook-error.json'] or result['task_completion']['strict_issue_count'] or result['task_completion'].get('error') or result['validity']['ignored_rejection_count'] or result['validity'].get('error') else 'pending' if result['pending_events'] else 'observed_metadata' if result['acknowledged_events'] else 'never_seen')
             # Information only: a leftover global OMP hook copy predates the vault-owned plan
             # (OMP.md says the installer never updates or removes it). After an engine update the
             # copy can be older than the installed vault hook, so a session outside the vault can
@@ -669,7 +698,8 @@ def main(argv=None):
             import beyin_v3_oturum as oturum
             if args.oturum_command == "yaz":
                 body = Path(args.dosya).read_text(encoding="utf-8") if args.dosya else sys.stdin.read()
-                result = oturum.yaz(vault, state, args.session, args.etiket, body, proje=args.proje)
+                result = oturum.yaz(vault, state, args.session, args.etiket, body, proje=args.proje,
+                                    harness=args.harness, model=args.model)
                 print(f"{result['card']} {'güncellendi' if result['updated'] else 'yazıldı'}; "
                       f"Last-Session.md özeti: {result['shown']}/{result['cards']} kart")
             elif args.oturum_command == "derle":
@@ -686,10 +716,8 @@ def main(argv=None):
             elif args.devir_command == "goster":
                 print(devir_mod.goster(vault, args.sid, detay=args.detay, tur=args.tur))
             else:
-                n = devir_mod.kapat(vault, args.sid, "devralan kapattı")
-                if n:
-                    import beyin_v3_oturum as oturum
-                    oturum.derle(vault, state)
+                import beyin_v3_oturum as oturum
+                n = oturum.close_handoff(vault, state, args.sid, "devralan kapattı")
                 print(f"{n} devir kartı kapatıldı" if n else "Bu kimlikte açık devir kartı yok.")
             return 0
         elif args.command == "refleks":
@@ -718,11 +746,10 @@ def main(argv=None):
             elif command == "gocet":
                 print(json.dumps(refleks.migrate(vault, apply=args.uygula), ensure_ascii=False, indent=2))
             else:
-                entries = refleks.dictionary(vault)
                 path = refleks.folder(vault) / refleks.DICTIONARY
-                if args.olustur and not path.exists():
-                    refleks.write_dictionary(vault, {k: [a for a in v if a not in (k, k.replace('-', ' '))] for k, v in entries.items()})
+                if args.olustur and refleks.write_dictionary(vault):
                     print(f"{path.relative_to(vault)} oluşturuldu")
+                entries = refleks.dictionary(vault)
                 for key, aliases in sorted(entries.items()):
                     print(f"- {key}: {', '.join(aliases)}")
             return 0
@@ -758,8 +785,15 @@ def main(argv=None):
             payload = read_json(args.file)
             result = [store.ingest(record) for record in payload] if isinstance(payload, list) else store.ingest(payload)
         elif args.command == "note-create":
+            from beyin_v3_origin import origin_fields
             payload = read_json(args.file)
-            result = sync.note_create(payload['source'], payload['text'], payload.get('metadata'))
+            metadata = payload.get('metadata')
+            if metadata is not None and not isinstance(metadata, dict):
+                raise ValueError('note metadata must be an object')
+            fields = origin_fields(args.harness, args.session or payload.get('session'), args.model or payload.get('model'))
+            metadata = dict(metadata or {}, **fields)
+            metadata.setdefault('harness', 'manual')
+            result = sync.note_create(payload['source'], payload['text'], metadata)
         elif args.command == "task-create":
             payload = read_json(args.file)
             result = sync.task_create(payload['source'], payload['text'], payload['metadata'])
@@ -822,16 +856,20 @@ def main(argv=None):
                 payload = {"event_id": args.event_id, "summary": summary, "refs": args.ref, "session": args.session}
             else:
                 payload = read_json(args.file)
+            session = args.session or payload.get('session')
+            close_handoff = False
+            if session:
+                from beyin_v3_devir import open_paths
+                close_handoff = bool(open_paths(vault, session))
+                if close_handoff:
+                    from beyin_v3_vault import require_branch
+                    require_branch(vault)
             result = sync.receipt(payload["event_id"], payload["summary"],
-                                          payload["refs"], args.harness, session=payload.get('session'))
-            if payload.get('session'):
-                try:  # iş receipt'le kapandı: bu oturumun devir kartı artık yarım iş değil (silmeden arşive)
-                    import beyin_v3_devir as devir_mod
-                    if devir_mod.kapat(vault, str(payload['session']), "receipt yazıldı"):
-                        import beyin_v3_oturum as oturum
-                        oturum.derle(vault, state)
-                except Exception:
-                    pass
+                                  payload["refs"], args.harness or payload.get('harness', 'codex'),
+                                  session=session, model=args.model or payload.get('model'))
+            if close_handoff:
+                from beyin_v3_oturum import close_handoff as close
+                close(vault, state, session, "receipt yazıldı")
         elif args.command == "history":
             # History is source-verified, so refresh first like context: an edit
             # made just before this command must not hide the audit trail.

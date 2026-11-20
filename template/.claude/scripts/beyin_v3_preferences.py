@@ -15,7 +15,7 @@ PROFILES = {
 
 
 def validate(value):
-    if not isinstance(value, dict) or set(value) - set(PROFILES['normal']):
+    if not isinstance(value, dict) or set(value) - (set(PROFILES['normal']) | {'beklenen_dal'}):
         raise ValueError('Unsupported preferences; use beyin.py preferences')
     result = dict(PROFILES['normal'], **value)
     if type(result['auto_sync']) is not bool:
@@ -27,6 +27,11 @@ def validate(value):
             raise ValueError(f'{key} must be an integer between {low} and {high}')
     if result['context_mode'] not in ('turn', 'session', 'off'):
         raise ValueError('context_mode must be turn, session or off')
+    branch = result.get('beklenen_dal')
+    if branch is None or branch == '':
+        result.pop('beklenen_dal', None)
+    elif not isinstance(branch, str) or len(branch) > 255 or any(c.isspace() or not c.isprintable() for c in branch):
+        raise ValueError('beklenen_dal must be a Git branch name or an empty string')
     return result
 
 
@@ -48,6 +53,8 @@ def save(vault, changes, profile=None):
     # The secret filter is an independent safety choice; changing performance
     # profiles must not silently enable or disable it.
     base = dict(PROFILES[profile], secret_filter=current['secret_filter']) if profile else current
+    if profile and 'beklenen_dal' in current:
+        base['beklenen_dal'] = current['beklenen_dal']
     result = validate(dict(base, **changes))
     path = preferences_path(vault)
     fd, temporary = tempfile.mkstemp(prefix='.beyin-preferences-', dir=path.parent)

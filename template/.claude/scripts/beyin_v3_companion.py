@@ -46,7 +46,7 @@ def initialize(vault, state):
     """Create missing starter notes once. These are user data, never package-owned.
 
     This is deliberately separate from managed rollback: learning written after
-    installation must survive updates and uninstall. Exclusive creation preserves
+    installation must survive updates and uninstall. Checking under a lock preserves
     existing notes and makes interrupted/repeated bootstrap safe to retry.
     """
     state = Path(state)
@@ -56,22 +56,25 @@ def initialize(vault, state):
     target = directory(vault)
     if target is None or target.is_symlink():
         return {'status': 'needs_attention', 'reason': 'Choose the existing companion directory; no notes created.'}
+    from beyin_v3_sync import atomic
+    from beyin_v3_vault import branch_status, file_lock
+    warning = branch_status(vault).get('warning')
+    if warning:
+        return {'status': 'needs_attention', 'reason': warning}
     target.mkdir(parents=True, exist_ok=True)
     if not target.resolve().is_relative_to(Path(vault).resolve()):
         raise ValueError('Companion directory escapes vault')
     created = []
     for name, text in STARTERS.items():
         path = target / name
-        # A pre-existing Soul already carries identity; do not create a competing Core.
-        if name == 'Core.md' and (target / 'Soul.md').exists():
+        if path.exists() or path.is_symlink():
             continue
-        try:
-            with path.open('x', encoding='utf-8') as output:
-                output.write(text)
+        with file_lock(vault, path):
+            # A pre-existing Soul already carries identity.
+            if path.exists() or (name == 'Core.md' and (target / 'Soul.md').exists()):
+                continue
+            atomic(path, text)
             created.append(name)
-        except FileExistsError:
-            pass
-    from beyin_v3_sync import atomic
     state.mkdir(parents=True, exist_ok=True)
     atomic(marker, json.dumps({'schema': 1, 'directory': target.relative_to(Path(vault).resolve()).as_posix()}))
     return {'status': 'initialized', 'created': created}

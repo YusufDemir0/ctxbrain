@@ -15,11 +15,12 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+
+from beyin_v3_sync import atomic as _atomic
+from beyin_v3_vault import branch_status, file_lock
 
 TAIL_BYTES = 4_000_000       # yalnız kaydın sonu okunur; hook süre sınırını aşmasın
 THROTTLE_SECONDS = 60        # PostToolUse'ta en fazla dakikada bir yazılır
@@ -37,14 +38,6 @@ SKIP_USER = ("<system-reminder>", "Base directory for this skill", "<command-", 
 def sid8(session_id):
     """Receipt/oturum kartıyla aynı kimlik: sha256(session_id)'nin ilk 8 onaltılığı."""
     return hashlib.sha256(str(session_id).encode("utf-8")).hexdigest()[:8]
-
-
-def _atomic(path, text):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".devir-", dir=path.parent)
-    with os.fdopen(fd, "w", encoding="utf-8") as out:
-        out.write(text)
-    os.replace(tmp, path)
 
 
 def _folder(vault):
@@ -303,14 +296,12 @@ def guncelle(vault, state, harness, payload, event, project=None, now=None):
             except (OSError, ValueError, TypeError):
                 pass
         path = transcript_of(harness, payload)
-        if path is None:
+        if path is None or branch_status(vault).get('warning'):
             return None
         info = parse(harness, path)
         if not (info["requests"] or info["plan"] or info["files"]):
             return None
         archived = folder / "Arşiv" / f"{sid}-{harness}.md"
-        if archived.exists() and not _new_request_since(info, archived.stat().st_mtime):
-            return None  # kart kapatıldı (oturum kartı/receipt); yeni istek gelmeden yeniden açılmaz
         if event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
             info["last_assistant"] = payload["last_assistant_message"]
         error = payload.get("error") or payload.get("error_details")
@@ -323,15 +314,17 @@ def guncelle(vault, state, harness, payload, event, project=None, now=None):
         except Exception:
             pass
         card = _card_path(folder, harness, sid)
-        first = not card.exists()
-        _atomic(card, text)
-        _atomic(stamp, json.dumps({"at": t}))
-        if first or event in FORCE_EVENTS:
-            try:
-                from beyin_v3_oturum import derle
-                derle(vault, state)
-            except Exception:
-                pass
+        from beyin_v3_oturum import _derle
+        summary = folder.parent / "Last-Session.md"
+        with file_lock(vault, summary, timeout=0):
+            with file_lock(vault, card, timeout=0):
+                if archived.exists() and not _new_request_since(info, archived.stat().st_mtime):
+                    return None  # Yeni istek gelmeden kapatılmış kart yeniden açılmaz.
+                first = not card.exists()
+                _atomic(card, text)
+                _atomic(stamp, json.dumps({"at": t}))
+            if first or event in FORCE_EVENTS:
+                _derle(vault, state, summary)
         return card
     except Exception:
         if os.environ.get("BEYIN_V3_DEVIR_DEBUG") == "1":
@@ -398,22 +391,26 @@ def ozet(vault, exclude_sid=None):
     return text[:SECTION_CAP]
 
 
+def open_paths(vault, sid):
+    folder = _folder(vault)
+    sid = re.sub(r"[^0-9a-f]", "", str(sid).lower())[:8]
+    return sorted(folder.glob(sid + "-*.md")) if folder is not None and len(sid) == 8 else []
+
+
 def kapat(vault, sid, sebep="kapatıldı"):
     """Kartı silmeden Devir/Arşiv'e taşır; kapatılan kart sayısını döndürür."""
-    folder = _folder(vault)
-    if folder is None or not folder.is_dir():
-        return 0
-    sid = re.sub(r"[^0-9a-f]", "", str(sid).lower())[:8]
-    if len(sid) != 8:
-        return 0
     count = 0
-    for p in folder.glob(sid + "-*.md"):
-        text = p.read_text(encoding="utf-8")
-        text = text.replace("Durum: açık ·", f"Durum: kapandı ({sebep}, {datetime.now():%Y-%m-%d %H:%M}) ·", 1)
-        target = folder / "Arşiv" / p.name
-        _atomic(target, text)
-        p.unlink()
-        count += 1
+    for p in open_paths(vault, sid):
+        with file_lock(vault, p):
+            if not p.is_file():
+                continue
+            text = p.read_text(encoding="utf-8")
+            text = text.replace("Durum: açık ·", f"Durum: kapandı ({sebep}, {datetime.now():%Y-%m-%d %H:%M}) ·", 1)
+            target = p.parent / "Arşiv" / p.name
+            with file_lock(vault, target):
+                _atomic(target, text)
+                p.unlink()  # Contents are already preserved in the archive.
+            count += 1
     return count
 
 

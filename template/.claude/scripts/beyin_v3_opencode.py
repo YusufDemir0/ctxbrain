@@ -86,8 +86,10 @@ function lifecycle(state, parentOf) {
       const info = tracked(id)
       return info ? [info.start, info.turn].filter((text) => text) : []
     },
-    async tool(id, tool) {
-      if (tracked(id) && WRITE_TOOLS.has(tool)) await send("PostToolUse", id)
+    async tool(id, tool, args, cwd) {
+      if (tracked(id) && WRITE_TOOLS.has(tool))
+        await runHook(state, { hook_event_name: "PostToolUse", session_id: id, tool_name: tool,
+          tool_input: args, cwd: cwd || VAULT })
     },
     async compact(id) {
       if (tracked(id)) await send("PreCompact", id)
@@ -107,7 +109,7 @@ function lifecycle(state, parentOf) {
 }
 
 // OpenCode 1.x: a factory returning named hooks.
-export const BeyinV3 = async ({ client } = {}) => {
+export const BeyinV3 = async ({ client, directory } = {}) => {
   const state = runtimeState()
   if (!state) return {}
   const core = lifecycle(state, async (id) => (await client?.session?.get?.({ path: { id } }))?.data?.parentID)
@@ -122,8 +124,8 @@ export const BeyinV3 = async ({ client } = {}) => {
     "experimental.chat.system.transform": async (input, output) => {
       if (Array.isArray(output?.system)) output.system.push(...core.context(input?.sessionID))
     },
-    "tool.execute.after": async (input) => {
-      await core.tool(input?.sessionID, input?.tool)
+    "tool.execute.after": async (input, output) => {
+      await core.tool(input?.sessionID, input?.tool, input?.args || output?.args, directory)
     },
     "experimental.session.compacting": async (input) => {
       await core.compact(input?.sessionID)
@@ -159,7 +161,7 @@ async function setup(ctx) {
       for (const text of core.context(event?.sessionID)) event.system.push({ type: "text", text })
   }))
   await hook(() => ctx.tool.hook("execute.after", async (event) => {
-    if (event?.status !== "error") await core.tool(event?.sessionID, event?.tool)
+    if (event?.status !== "error") await core.tool(event?.sessionID, event?.tool, event?.input, event?.cwd)
   }))
   await hook(() => ctx.session.hook("compaction", async (event) => {
     await core.compact(event?.sessionID)
